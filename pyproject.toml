@@ -1,0 +1,23 @@
+[project]
+name = "netbox-ssh-fingerprint"
+version = "0.1.0"
+description = "NetBox plugin for SSH host keys: known_hosts and SSHFP export, key verification and post-quantum readiness report"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Stefan Grosser" }]
+requires-python = ">=3.12"
+classifiers = ["Framework :: Django", "Programming Language :: Python :: 3"]
+
+[project.urls]
+Homepage = "https://github.com/Bierchermuesli/netbox-ssh-fingerprint"
+Repository = "https://github.com/Bierchermuesli/netbox-ssh-fingerprint"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["netbox_ssh_fingerprint", "netbox_ssh_fingerprint.api", "netbox_ssh_fingerprint.migrations"]
+
+[tool.setuptools.package-data]
+netbox_ssh_fingerprint = ["templates/**/*.html"]
