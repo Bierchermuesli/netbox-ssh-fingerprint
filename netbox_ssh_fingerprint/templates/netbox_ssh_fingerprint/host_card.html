@@ -1,0 +1,86 @@
+{% load i18n helpers %}
+<div class="card">
+  <h2 class="card-header">
+    {% trans "SSH Host Keys" %}
+    <div class="card-actions">
+      {% if can_fetch %}
+        <form method="post" action="{% url 'plugins:netbox_ssh_fingerprint:fetch' model=model_name pk=host.pk %}" class="d-inline">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-ghost-primary btn-sm" title="{% trans 'Fetch the keys from the host and compare them' %}">
+            <i class="mdi mdi-key-chain"></i> {% trans "Fetch & verify" %}
+          </button>
+        </form>
+      {% endif %}
+      {% if can_add %}
+        <a href="{% url 'plugins:netbox_ssh_fingerprint:hostkey_add' %}?{{ host_field }}={{ host.pk }}&return_url={{ host.get_absolute_url }}" class="btn btn-ghost-primary btn-sm">
+          <i class="mdi mdi-plus-thick"></i> {% trans "Add" %}
+        </a>
+      {% endif %}
+      {% if keys %}
+        <a href="{% url 'plugins:netbox_ssh_fingerprint:known_hosts' %}?{{ host_field }}_id={{ host.pk }}" class="btn btn-ghost-secondary btn-sm" target="_blank">known_hosts</a>
+      {% endif %}
+    </div>
+  </h2>
+  {% if keys %}
+    <table class="table table-hover attr-table">
+      <thead>
+        <tr><th>{% trans "Type" %}</th><th>{% trans "Fingerprint" %}</th><th>{% trans "Status" %}</th><th>{% trans "Seen" %}</th></tr>
+      </thead>
+      {% for key in keys %}
+        <tr>
+          <td class="text-nowrap">
+            {{ key.key_type }}{% if key.endpoint == 'oob' %} <span class="badge text-bg-blue">OOB</span>{% endif %}
+            {% if key.weak %}<span class="badge text-bg-red" title="{{ key.bits }} bits">weak</span>{% endif %}
+            {% if key.shared %}<span class="badge text-bg-gray">shared</span>{% endif %}
+          </td>
+          <td class="font-monospace small text-break"><a href="{{ key.get_absolute_url }}">{{ key.fingerprint_sha256 }}</a></td>
+          <td>{% badge key.get_status_display bg_color=key.get_status_color %}</td>
+          <td class="small text-nowrap">{{ key.last_seen|date:"Y-m-d"|placeholder }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="card-body text-muted">{% trans "No host keys recorded." %}</div>
+  {% endif %}
+  {% for scan in scans %}
+    <div class="card-footer small">
+      <strong>{% if scan.endpoint == 'oob' %}OOB{% else %}SSH{% endif %}</strong>
+      {{ scan.address }}{% if scan.port != 22 %}:{{ scan.port }}{% endif %} ·
+      {% if scan.reachable %}
+        <span class="font-monospace">{{ scan.banner }}</span> ·
+        {% if scan.pq_ready %}
+          <span class="badge text-bg-green" title="{% trans 'Offers a post-quantum hybrid key exchange' %}">PQ ready</span>
+        {% else %}
+          <span class="badge text-bg-orange" title="{% trans 'No post-quantum key exchange: recorded sessions could be decrypted later' %}">no PQ KEX</span>
+        {% endif %}
+        {% if scan.weak_algorithms %}
+          <span class="badge text-bg-red" title="{{ scan.weak_algorithms|join:', ' }}">{{ scan.weak_algorithms|length }} weak algorithms</span>
+        {% endif %}
+      {% else %}
+        <span class="text-danger">{% trans "not reachable" %}</span>{% if scan.error %}: {{ scan.error|truncatechars:80 }}{% endif %}
+      {% endif %}
+      · {{ scan.scanned_at|date:"Y-m-d H:i" }}
+      {% if scan.reachable %}
+        <details class="mt-1">
+          <summary class="text-muted">{% trans "Algorithms" %}</summary>
+          <dl class="row mb-0 mt-1">
+            <dt class="col-3">KEX</dt><dd class="col-9 font-monospace">{{ scan.kex_display|join:", " }}</dd>
+            <dt class="col-3">{% trans "Host key" %}</dt><dd class="col-9 font-monospace">{{ scan.host_key_algorithms|join:", " }}</dd>
+            <dt class="col-3">{% trans "Ciphers" %}</dt><dd class="col-9 font-monospace">{{ scan.ciphers|join:", " }}</dd>
+            <dt class="col-3">MACs</dt><dd class="col-9 font-monospace">{{ scan.macs|join:", " }}</dd>
+          </dl>
+        </details>
+      {% endif %}
+    </div>
+  {% endfor %}
+  {% if can_change and keys %}
+    <div class="card-footer text-end">
+      <form method="post" action="{% url 'plugins:netbox_ssh_fingerprint:replace_hardware' model=model_name pk=host.pk %}" class="d-inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-outline-danger" title="{% trans 'RMA or re-install: revoke the active keys and fetch the new ones' %}">
+          <i class="mdi mdi-swap-horizontal"></i> {% trans "Hardware replaced / re-installed" %}
+        </button>
+      </form>
+    </div>
+  {% endif %}
+</div>

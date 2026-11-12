@@ -1,0 +1,34 @@
+{% extends "ui/panels/_base.html" %}
+{% load i18n %}
+
+{% block panel_content %}
+  <div class="card-body">
+    <div class="mb-1 text-muted small">{% trans "Public key" %}</div>
+    <pre class="text-break" style="white-space: pre-wrap">{{ object.key_type }} {{ object.public_key }}</pre>
+    {% if known_hosts %}
+      <div class="mb-1 text-muted small">known_hosts</div>
+      <pre class="text-break" style="white-space: pre-wrap">{{ known_hosts }}</pre>
+    {% endif %}
+    {% if sshfp %}
+      <div class="mb-1 text-muted small">SSHFP</div>
+      <pre class="text-break" style="white-space: pre-wrap">{{ sshfp }}</pre>
+    {% endif %}
+    <div class="btn-list">
+      {% if can_approve and object.status != 'active' %}
+        <form method="post" action="{% url 'plugins:netbox_ssh_fingerprint:hostkey_approve' pk=object.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-green"><i class="mdi mdi-check-decagram"></i> {% trans "Approve" %}</button>
+        </form>
+      {% endif %}
+      {% if can_change and object.status != 'revoked' %}
+        <form method="post" action="{% url 'plugins:netbox_ssh_fingerprint:hostkey_revoke' pk=object.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-red"><i class="mdi mdi-cancel"></i> {% trans "Revoke" %}</button>
+        </form>
+      {% endif %}
+    </div>
+    {% if object.status == 'pending' and can_approve %}
+      <div class="form-text">{% trans "Approving makes this the active key of its type and revokes the previous one." %}</div>
+    {% endif %}
+  </div>
+{% endblock panel_content %}

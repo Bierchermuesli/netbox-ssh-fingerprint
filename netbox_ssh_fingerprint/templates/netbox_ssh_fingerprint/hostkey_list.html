@@ -1,0 +1,14 @@
+{% extends 'generic/object_list.html' %}
+{% load i18n %}
+
+{% block extra_controls %}
+  <a href="{% url 'plugins:netbox_ssh_fingerprint:known_hosts' %}?{{ request.GET.urlencode }}&download=1" class="btn btn-outline-secondary">
+    <i class="mdi mdi-download"></i> known_hosts
+  </a>
+  <a href="{% url 'plugins:netbox_ssh_fingerprint:sshfp' %}?{{ request.GET.urlencode }}&download=1" class="btn btn-outline-secondary">
+    <i class="mdi mdi-download"></i> SSHFP
+  </a>
+  <a href="{% url 'plugins:netbox_ssh_fingerprint:report' %}" class="btn btn-outline-secondary">
+    <i class="mdi mdi-chart-box-outline"></i> {% trans "Report" %}
+  </a>
+{% endblock %}
