@@ -1,0 +1,107 @@
+# Local demo: NetBox with the plugin from this checkout, a worker for the fetch jobs, a local SSH server
+# to scan and seeded hosts, keys and scans.
+#   docker compose up -d   →  http://localhost:8014  (admin / admin)
+#   smoke test: docker compose exec netbox sh -c "/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < /demo/smoke.py"
+name: netbox-ssh-fingerprint
+
+x-netbox: &netbox
+  image: ghcr.io/netbox-community/netbox:${NETBOX_VERSION:-v4.6.5}
+  user: root
+  environment: &env
+    SECRET_KEY: demo-only-not-secret-0123456789abcdefghijklmnopqrstuvwxyz0123
+    DB_HOST: postgres
+    DB_NAME: netbox
+    DB_USER: netbox
+    DB_PASSWORD: netbox
+    REDIS_HOST: redis
+    REDIS_CACHE_HOST: redis
+    SUPERUSER_NAME: admin
+    SUPERUSER_PASSWORD: admin
+    SUPERUSER_EMAIL: admin@example.com
+  volumes:
+    - ..:/src:ro
+    - ./configuration.py:/etc/netbox/config/plugins.py:ro
+    - .:/demo:ro
+
+services:
+  netbox:
+    <<: *netbox
+    entrypoint:
+      - sh
+      - -c
+      - rm -rf /tmp/plugin && cp -r /src /tmp/plugin && rm -rf /tmp/plugin/dev
+        && /usr/local/bin/uv pip install -q --python /opt/netbox/venv/bin/python /tmp/plugin
+        && exec /opt/netbox/docker-entrypoint.sh /opt/netbox/launch-netbox.sh
+    ports:
+      - "${NETBOX_PORT:-8014}:8080"
+    depends_on: [postgres, redis]
+    healthcheck:
+      test: curl -sf http://localhost:8080/login/ || exit 1
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 30
+
+  netbox-worker:
+    <<: *netbox
+    entrypoint:
+      - sh
+      - -c
+      - rm -rf /tmp/plugin && cp -r /src /tmp/plugin && rm -rf /tmp/plugin/dev
+        && /usr/local/bin/uv pip install -q --python /opt/netbox/venv/bin/python /tmp/plugin
+        && exec /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py rqworker high default low
+    depends_on:
+      netbox:
+        condition: service_healthy
+
+  # SSH servers of different OpenSSH generations at fixed addresses, so "Fetch & verify" works anywhere.
+  # Older Alpine releases pin older OpenSSH versions.
+  ssh-10:  # OpenSSH 10: ML-KEM post-quantum key exchange by default
+    <<: &sshd
+      entrypoint:
+        - sh
+        - -c
+        - apk add -q openssh && ssh-keygen -A && exec /usr/sbin/sshd -D -e
+    image: alpine:3.22
+    networks: {default: {ipv4_address: 192.168.250.10}}
+  ssh-9:   # OpenSSH 9.1: sntrup761 post-quantum key exchange
+    <<: *sshd
+    image: alpine:3.17
+    networks: {default: {ipv4_address: 192.168.250.11}}
+  ssh-8:   # OpenSSH 8.3: no post-quantum key exchange, still offers ssh-rsa (SHA-1)
+    <<: *sshd
+    image: alpine:3.12
+    networks: {default: {ipv4_address: 192.168.250.12}}
+  ssh-7:   # OpenSSH 7.5: legacy, DSA host key, CBC ciphers
+    <<: *sshd
+    image: alpine:3.7
+    networks: {default: {ipv4_address: 192.168.250.13}}
+
+  seed:
+    <<: *netbox
+    entrypoint:
+      - sh
+      - -c
+      - rm -rf /tmp/plugin && cp -r /src /tmp/plugin && rm -rf /tmp/plugin/dev
+        && /usr/local/bin/uv pip install -q --python /opt/netbox/venv/bin/python /tmp/plugin
+        && /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < /demo/seed.py
+    depends_on:
+      netbox:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: netbox
+
+  redis:
+    image: redis:7-alpine
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 192.168.250.0/24
