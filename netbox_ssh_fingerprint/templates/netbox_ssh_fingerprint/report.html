@@ -1,0 +1,179 @@
+{% extends 'generic/_base.html' %}
+{% load i18n helpers %}
+
+{% block title %}{% trans "SSH Host Key Report" %}{% endblock %}
+
+{% block content %}
+{% url 'plugins:netbox_ssh_fingerprint:hostkey_list' as list_url %}
+<div class="row row-cards mb-3">
+  {% for label, count, hosts in without_key %}
+    <div class="col-sm-6 col-lg-2">
+      <div class="card card-sm"><div class="card-body">
+        <div class="text-muted">{{ label|bettertitle }} {% trans "without key" %}</div>
+        <div class="h1 mb-0 {% if count %}text-orange{% endif %}">{{ count }}</div>
+      </div></div>
+    </div>
+  {% endfor %}
+  <div class="col-sm-6 col-lg-2">
+    <a href="{{ list_url }}?status=pending" class="card card-sm card-link"><div class="card-body">
+      <div class="text-muted">{% trans "Mismatches" %}</div>
+      <div class="h1 mb-0 {% if mismatch_count %}text-red{% endif %}">{{ mismatch_count }}</div>
+    </div></a>
+  </div>
+  <div class="col-sm-6 col-lg-2">
+    <a href="{{ list_url }}?weak=true" class="card card-sm card-link"><div class="card-body">
+      <div class="text-muted">{% trans "Weak keys" %}</div>
+      <div class="h1 mb-0 {% if weak_count %}text-red{% endif %}">{{ weak_count }}</div>
+    </div></a>
+  </div>
+  <div class="col-sm-6 col-lg-2">
+    <div class="card card-sm"><div class="card-body">
+      <div class="text-muted">{% trans "Duplicate keys" %}</div>
+      <div class="h1 mb-0 {% if dup_count %}text-orange{% endif %}">{{ dup_count }}</div>
+    </div></div>
+  </div>
+  <div class="col-sm-6 col-lg-2">
+    <div class="card card-sm"><div class="card-body">
+      <div class="text-muted">{% trans "Post-quantum KEX" %}</div>
+      <div class="h1 mb-0">{{ alg.pq_ready }} <span class="h4 text-muted">/ {{ alg.reachable }}</span></div>
+    </div></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-lg-6">
+
+    <div class="card">
+      <h2 class="card-header">{% trans "Mismatches" %}</h2>
+      <div class="card-body text-muted small pb-0">
+        {% trans "The host presented a different key than the active one on record. Either the host was re-installed or replaced, or something answers in its place. Check before approving." %}
+      </div>
+      {% include 'netbox_ssh_fingerprint/inc/key_rows.html' with keys=mismatches empty=_("No mismatches") %}
+    </div>
+
+    <div class="card">
+      <h2 class="card-header">{% trans "Stale keys" %}</h2>
+      <div class="card-body small">
+        {% blocktrans trimmed %}
+          <strong>{{ stale_count }}</strong> active keys were not seen by a scan for more than {{ stale_days }} days,
+          <strong>{{ never_seen }}</strong> were never verified by a scan.
+        {% endblocktrans %}
+      </div>
+      {% include 'netbox_ssh_fingerprint/inc/key_rows.html' with keys=stale empty=_("No stale keys") %}
+    </div>
+
+    <div class="card">
+      <h2 class="card-header">{% trans "Weak keys" %}</h2>
+      <div class="card-body small">
+        {% for label, count in weak_types %}<span class="badge text-bg-red me-1">{{ label }}: {{ count }}</span>{% endfor %}
+        <div class="text-muted mt-1">{% trans "DSA and RSA below 2048 bits. Generate a new Ed25519 key on these hosts." %}</div>
+      </div>
+      {% include 'netbox_ssh_fingerprint/inc/key_rows.html' with keys=weak_keys empty=_("No weak keys") %}
+    </div>
+
+    <div class="card">
+      <h2 class="card-header">{% trans "Duplicate keys" %}</h2>
+      <div class="card-body text-muted small pb-0">
+        {% trans "The same key on several hosts. Intended for HA pairs and VIPs (marked as shared), otherwise usually a cloned VM image whose host keys were never regenerated." %}
+      </div>
+      <table class="table table-hover">
+        {% for row in duplicates %}
+          <tr>
+            <td class="font-monospace small">{{ row.key_type }}<br>{{ row.fingerprint_sha256 }}</td>
+            <td>{% for key in row.keys %}<a href="{{ key.get_absolute_url }}">{{ key.host }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+            <td>{% if row.intended %}<span class="badge text-bg-gray">shared</span>{% else %}<span class="badge text-bg-orange">{% trans "unintended" %}</span>{% endif %}</td>
+          </tr>
+        {% empty %}
+          <tr><td class="text-muted">{% trans "No duplicates" %}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+
+  </div>
+  <div class="col-lg-6">
+
+    <div class="card">
+      <h2 class="card-header">{% trans "Post-quantum readiness" %}</h2>
+      <div class="card-body small">
+        <p>
+          {% blocktrans trimmed with pq=alg.pq_ready reachable=alg.reachable scanned=alg.scanned %}
+            <strong>{{ pq }}</strong> of {{ reachable }} reachable endpoints offer a post-quantum hybrid key
+            exchange (ML-KEM or sntrup761). {{ scanned }} endpoints were scanned.
+          {% endblocktrans %}
+        </p>
+        <p class="text-muted mb-0">
+          {% trans "Without it, recorded sessions can be decrypted once large quantum computers exist (store now, decrypt later). OpenSSH offers mlkem768x25519-sha256 by default since 10.0 and sntrup761x25519 since 9.0. Host key signatures are not post-quantum yet in OpenSSH." %}
+        </p>
+      </div>
+      <table class="table table-hover">
+        <thead><tr><th>{% trans "Host" %}</th><th>{% trans "Software" %}</th><th>{% trans "Best KEX offered" %}</th></tr></thead>
+        {% for scan in alg.not_pq %}
+          <tr>
+            <td><a href="{{ scan.host.get_absolute_url }}">{{ scan.host }}</a>{% if scan.endpoint == 'oob' %} <span class="badge text-bg-blue">OOB</span>{% endif %}</td>
+            <td class="font-monospace small">{{ scan.banner }}</td>
+            <td class="font-monospace small">{{ scan.kex_display|first }}</td>
+          </tr>
+        {% empty %}
+          <tr><td class="text-muted" colspan="3">{% trans "All reachable endpoints are post-quantum ready" %}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 class="card-header">{% trans "Weak algorithms offered" %}</h2>
+      <div class="card-body small text-muted pb-0">
+        {% blocktrans trimmed with count=alg.with_weak %}
+          {{ count }} endpoints still offer algorithms that ssh-audit, BSI TR-02102-4 or current OpenSSH consider
+          broken or weak (SHA-1, 1024-bit DH, CBC and 3DES ciphers, MD5 MACs, ssh-rsa signatures).
+        {% endblocktrans %}
+      </div>
+      <table class="table table-hover">
+        {% for name, count in alg.weak_algorithms %}
+          <tr><td class="font-monospace small">{{ name }}</td><td class="text-end">{{ count }}</td></tr>
+        {% empty %}
+          <tr><td class="text-muted">{% trans "None" %}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 class="card-header">{% trans "SSH software" %}</h2>
+      <table class="table table-hover">
+        {% for banner, count in alg.software %}
+          <tr><td class="font-monospace small">{{ banner }}</td><td class="text-end">{{ count }}</td></tr>
+        {% empty %}
+          <tr><td class="text-muted">{% trans "No scans yet" %}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 class="card-header">{% trans "Hosts without key" %}</h2>
+      <div class="card-body text-muted small pb-0">{% trans "Devices and VMs with a primary IP but no active host key." %}</div>
+      <table class="table table-hover">
+        {% for label, count, hosts in without_key %}
+          {% for host in hosts %}
+            <tr><td><a href="{{ host.get_absolute_url }}">{{ host }}</a></td><td class="text-muted small">{{ label }}</td></tr>
+          {% endfor %}
+        {% endfor %}
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 class="card-header">{% trans "Not reachable" %}</h2>
+      <table class="table table-hover">
+        {% for scan in alg.unreachable %}
+          <tr>
+            <td><a href="{{ scan.host.get_absolute_url }}">{{ scan.host }}</a></td>
+            <td class="font-monospace small">{{ scan.address }}</td>
+            <td class="small text-muted">{{ scan.error|truncatechars:60 }}</td>
+          </tr>
+        {% empty %}
+          <tr><td class="text-muted">{% trans "None" %}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

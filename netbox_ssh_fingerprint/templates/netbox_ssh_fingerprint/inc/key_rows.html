@@ -1,0 +1,13 @@
+{% load helpers %}
+<table class="table table-hover">
+  {% for key in keys %}
+    <tr>
+      <td><a href="{{ key.host.get_absolute_url }}">{{ key.host }}</a>{% if key.endpoint == 'oob' %} <span class="badge text-bg-blue">OOB</span>{% endif %}</td>
+      <td class="small">{{ key.key_type }}{% if key.weak %} ({{ key.bits }}){% endif %}</td>
+      <td class="font-monospace small"><a href="{{ key.get_absolute_url }}">{{ key.fingerprint_sha256 }}</a></td>
+      <td class="small text-nowrap">{{ key.last_seen|date:"Y-m-d"|placeholder }}</td>
+    </tr>
+  {% empty %}
+    <tr><td class="text-muted">{{ empty }}</td></tr>
+  {% endfor %}
+</table>
