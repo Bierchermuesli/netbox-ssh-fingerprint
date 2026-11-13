@@ -43,8 +43,12 @@ Paramiko cannot parse `@revoked` lines and fails on the whole file. Fetch with `
 no revocation; with a reject policy it refuses every key that is not in the file, which covers revoked
 keys too.
 
+Paramiko also keeps only one key per host and key type. A VRRP/HSRP virtual IP is listed with the keys
+of every router in the group, so Paramiko would keep just one of them and fail after a failover. Fetch
+with `vips=0` and let Paramiko-based tools connect to the routers' own addresses, not the VIP.
+
 ```bash
-curl … "https://netbox.example.net/api/plugins/ssh-fingerprint/known-hosts/?role=switch&revoked=0" \
+curl … "https://netbox.example.net/api/plugins/ssh-fingerprint/known-hosts/?role=switch&revoked=0&vips=0" \
   -o ~/.ssh/known_hosts.netbox
 ```
 
@@ -69,9 +73,15 @@ client.set_missing_host_key_policy(paramiko.RejectPolicy())
 ```
 
 Ansible `network_cli` uses ansible-pylibssh when installed, otherwise Paramiko. Both read the
-controller user's `~/.ssh/known_hosts`; put the export (with `revoked=0`) there and keep
+controller user's `~/.ssh/known_hosts`; put the export (with `revoked=0&vips=0`) there and keep
 `host_key_checking` enabled. Check the behaviour of your libssh version with a revoked key before
 relying on it.
+
+## Stacks and virtual IPs
+
+- A switch stack (virtual chassis) is one SSH host. Its keys are on the master device; the entry also
+  carries the stack name, so `ssh stack-bern-a` works.
+- A VRRP/HSRP virtual IP is listed once per router key. OpenSSH accepts whichever router answers.
 
 ## Connecting by IP or by name
 

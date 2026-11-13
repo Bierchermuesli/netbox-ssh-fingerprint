@@ -314,7 +314,7 @@ class ReplaceHardwareView(LoginRequiredMixin, View):
 
 def text_response(request, content, filename):
     etag = '"' + hashlib.sha256(content.encode()).hexdigest()[:32] + '"'
-    if etag in request.headers.get('If-None-Match', ''):
+    if etag in (request.headers.get('If-None-Match') or ''):
         return HttpResponseNotModified()
     response = HttpResponse(content, content_type='text/plain; charset=utf-8')
     response['ETag'] = etag
@@ -326,7 +326,7 @@ def text_response(request, content, filename):
 def filtered_keys(request):
     queryset = HostKey.objects.restrict(request.user, 'view')
     params = request.GET.copy()
-    for option in ('include', 'hashed', 'revoked', 'download'):
+    for option in ('include', 'hashed', 'revoked', 'vips', 'download'):
         params.pop(option, None)
     return filtersets.HostKeyFilterSet(params, queryset).qs
 
@@ -338,12 +338,13 @@ def _flag(request, name, default):
 
 def export_options(request):
     """
-    include=both|names|ips, hashed=1, revoked=0 (for Paramiko-based clients).
+    include=both|names|ips, hashed=1, revoked=0 and vips=0 (for Paramiko-based clients).
     """
     include = request.GET.get('include') or exports._config('known_hosts_include')
     if include not in exports.INCLUDE_CHOICES:
         include = 'both'
-    return {'include': include, 'hashed': _flag(request, 'hashed', False), 'revoked': _flag(request, 'revoked', True)}
+    return {'include': include, 'hashed': _flag(request, 'hashed', False), 'revoked': _flag(request, 'revoked', True),
+            'vips': _flag(request, 'vips', True)}
 
 
 class KnownHostsView(LoginRequiredMixin, View):

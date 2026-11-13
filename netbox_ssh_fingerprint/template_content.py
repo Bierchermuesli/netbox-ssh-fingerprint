@@ -19,6 +19,10 @@ class HostKeysCard(PluginTemplateExtension):
         host_field = 'device' if host._meta.model_name == 'device' else 'virtual_machine'
         keys = HostKey.objects.restrict(user, 'view').filter(**{host_field: host}).order_by(
             'endpoint', 'status', 'key_type')
+        vc = getattr(host, 'virtual_chassis', None)
+        if vc and vc.master_id and vc.master_id != host.pk and not keys.exists():
+            # A stack answers SSH as one host; its keys are recorded on the master
+            return self.render('netbox_ssh_fingerprint/vc_member_card.html', {'vc': vc})
         if not in_scope(host) and not keys.exists():
             return ''
         return self.render('netbox_ssh_fingerprint/host_card.html', {

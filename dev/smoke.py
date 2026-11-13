@@ -128,6 +128,7 @@ try:
         # Report drill-down: NetBox lists with filters, pagination and export
         for url, present, absent in (
             ('/plugins/ssh-fingerprint/report/devices/without-key/', 'srv-nokey-01', 'ap-thun-01'),
+            ('/plugins/ssh-fingerprint/report/devices/without-key/', 'srv-nokey-02', 'sw-stack-a2'),
             ('/plugins/ssh-fingerprint/report/devices/no-pq/', 'sw-thun-01', 'srv-bern-01<'),
             ('/plugins/ssh-fingerprint/report/devices/unreachable/', 'sw-thun-05', 'sw-thun-01<'),
             ('/plugins/ssh-fingerprint/report/devices/weak-algorithms/?algorithm=kex:diffie-hellman-group1-sha1',
@@ -164,6 +165,16 @@ try:
         check('[vm-jump-01]:2222' in kh, 'known_hosts: non-standard port')
         check('2001:db8:' in kh, 'known_hosts: IPv6')
         check('srv-bern-01-bmc.oob.example.net' in kh, 'known_hosts: out-of-band endpoint')
+        check('sw-stack-a1,stack-bern-a,' in kh, 'known_hosts: stack name on the master')
+        vip_lines = [line for line in kh.splitlines() if line.startswith('gw-bern.net.example.net,192.0.2.254 ')]
+        core_keys = HostKey.objects.filter(device__name__in=['rt-core-01', 'rt-core-02'], status='active',
+                                           endpoint='host').count()
+        check(len(vip_lines) == core_keys and core_keys >= 4, f'known_hosts: VRRP VIP with the keys of both routers '
+              f'({len(vip_lines)} lines, {core_keys} keys)')
+        r2 = c.get('/plugins/ssh-fingerprint/known-hosts/?vips=0&revoked=0')
+        check('192.0.2.254' not in r2.content.decode(), 'known_hosts: vips=0 for Paramiko')
+        r2 = c.get(Device.objects.get(name='sw-stack-a2').get_absolute_url())
+        check('Member of the stack' in r2.content.decode(), 'stack member card points to the master')
         etag = r.headers.get('ETag')
         r = c.get('/plugins/ssh-fingerprint/known-hosts/', HTTP_IF_NONE_MATCH=etag)
         check(r.status_code == 304, 'known_hosts: 304 with matching ETag')

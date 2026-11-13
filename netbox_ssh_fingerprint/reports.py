@@ -53,8 +53,10 @@ def host_kind_queryset(model, kind, algorithm=None):
     if kind == 'without-key':
         active = HostKey.objects.filter(
             **{field: OuterRef('pk')}, endpoint=HostKeyEndpointChoices.HOST, status=HostKeyStatusChoices.ACTIVE)
-        return qs.filter(Q(primary_ip4__isnull=False) | Q(primary_ip6__isnull=False), scope_filter(model)) \
-            .exclude(Exists(active))
+        qs = qs.filter(Q(primary_ip4__isnull=False) | Q(primary_ip6__isnull=False), scope_filter(model))
+        if model is Device:  # stack members are covered by the master's keys
+            qs = qs.filter(Q(virtual_chassis__isnull=True) | Q(vc_master_for__isnull=False))
+        return qs.exclude(Exists(active))
     scans = EndpointScan.objects.filter(**{field: OuterRef('pk')})
     if kind == 'no-pq':
         scans = scans.filter(reachable=True, pq_ready=False)
@@ -79,6 +81,8 @@ def hosts_without_key(user):
         qs = model.objects.restrict(user, 'view').filter(
             Q(primary_ip4__isnull=False) | Q(primary_ip6__isnull=False), scope_filter(model),
         ).exclude(Exists(active)).order_by('name')
+        if model is Device:  # stack members are covered by the master's keys
+            qs = qs.filter(Q(virtual_chassis__isnull=True) | Q(vc_master_for__isnull=False))
         out.append((model._meta.verbose_name_plural, qs.count(), list(qs[:LIMIT])))
     return out
 

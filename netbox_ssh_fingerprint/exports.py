@@ -5,10 +5,12 @@ import base64
 from collections import defaultdict
 
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Max
+from django.db.models import Max, Q
 
-from ipam.models import Service
+from dcim.models import Interface
+from ipam.models import FHRPGroup, FHRPGroupAssignment, IPAddress, Service
 from netbox.plugins import get_plugin_config
+from virtualization.models import VMInterface
 
 from .choices import HostKeyEndpointChoices, HostKeyStatusChoices
 from .keys import canonical_ip, host_pattern, known_hosts_lines, sshfp_records
@@ -22,7 +24,7 @@ def _config(name):
 
 def export_queryset(queryset):
     return queryset.select_related(
-        'device__primary_ip4', 'device__primary_ip6', 'device__oob_ip',
+        'device__primary_ip4', 'device__primary_ip6', 'device__oob_ip', 'device__virtual_chassis',
         'virtual_machine__primary_ip4', 'virtual_machine__primary_ip6',
     ).order_by('device__name', 'virtual_machine__name', 'endpoint', 'key_type', 'pk')
 
@@ -63,6 +65,10 @@ def host_names(key):
     if key.endpoint == HostKeyEndpointChoices.HOST and key.host.name:
         names.append(key.host.name)
         names += [f'{key.host.name}.{suffix.strip(".")}' for suffix in _config('domain_suffixes')]
+        # The master of a virtual chassis answers for the whole stack
+        vc = getattr(key.host, 'virtual_chassis', None)
+        if vc and vc.master_id == key.host.pk and vc.name:
+            names.append(vc.name)
     names += [ip.dns_name for ip in endpoint_addresses(key) if ip.dns_name]
     return list(dict.fromkeys(names))
 
@@ -76,7 +82,49 @@ def host_patterns(key, include='both', ports=None):
     return [host_pattern(p, port) for p in names + ips]
 
 
-def known_hosts(queryset, include='both', hashed=False, revoked=True):
+def vip_lines(keys, include='both', hashed=False):
+    """
+    known_hosts lines for the virtual IPs of FHRP groups (VRRP, HSRP, ...): the VIP moves between the
+    members, so it is listed with the active keys of every member. OpenSSH accepts any of them.
+    """
+    host_keys = defaultdict(list)
+    for key in keys:
+        if key.endpoint == HostKeyEndpointChoices.HOST and key.status == HostKeyStatusChoices.ACTIVE:
+            host_keys[(key.host._meta.model_name, key.host.pk)].append(key)
+    if not host_keys:
+        return []
+    device_ids = [pk for model, pk in host_keys if model == 'device']
+    vm_ids = [pk for model, pk in host_keys if model == 'virtualmachine']
+    iface_host = {pk: ('device', dev) for pk, dev in
+                  Interface.objects.filter(device_id__in=device_ids).values_list('pk', 'device_id')}
+    vmiface_host = {pk: ('virtualmachine', vm) for pk, vm in
+                    VMInterface.objects.filter(virtual_machine_id__in=vm_ids).values_list('pk', 'virtual_machine_id')}
+    iface_ct = ContentType.objects.get_for_model(Interface)
+    vmiface_ct = ContentType.objects.get_for_model(VMInterface)
+    members = defaultdict(set)
+    assignments = FHRPGroupAssignment.objects.filter(
+        Q(interface_type=iface_ct, interface_id__in=list(iface_host))
+        | Q(interface_type=vmiface_ct, interface_id__in=list(vmiface_host))
+    ).values_list('group_id', 'interface_type_id', 'interface_id')
+    for group_id, ct_id, iface_id in assignments:
+        members[group_id].add((iface_host if ct_id == iface_ct.pk else vmiface_host)[iface_id])
+    vips = IPAddress.objects.filter(
+        assigned_object_type=ContentType.objects.get_for_model(FHRPGroup), assigned_object_id__in=list(members),
+    ).order_by('address')
+    lines = []
+    for vip in vips:
+        patterns = []
+        if include in ('both', 'names') and vip.dns_name:
+            patterns.append(vip.dns_name)
+        if include in ('both', 'ips'):
+            patterns.append(canonical_ip(vip.address))
+        for host in sorted(members[vip.assigned_object_id]):
+            for key in host_keys[host]:
+                lines += known_hosts_lines(patterns, key.key_type, key.public_key, hashed=hashed)
+    return lines
+
+
+def known_hosts(queryset, include='both', hashed=False, revoked=True, vips=True):
     """
     Active keys as normal entries, revoked keys with @revoked so ssh refuses them. Pending keys are left out.
     revoked=False drops the @revoked lines for clients that cannot parse them (Paramiko, so Netmiko and
@@ -91,6 +139,8 @@ def known_hosts(queryset, include='both', hashed=False, revoked=True):
             host_patterns(key, include, ports), key.key_type, key.public_key,
             revoked=key.status == HostKeyStatusChoices.REVOKED, hashed=hashed,
         )
+    if vips:
+        lines += vip_lines(keys, include, hashed)
     return '\n'.join(lines) + ('\n' if lines else '')
 
 

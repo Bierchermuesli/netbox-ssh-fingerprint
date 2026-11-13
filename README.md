@@ -56,6 +56,10 @@ A hostname proves nothing; the host key is the only thing cryptographically boun
 - **`known_hosts` export** filtered by site, tenant, role or tag: host names, IPv4 and IPv6 addresses
   or both, `[host]:port` for a NetBox service named `ssh` on another port, optional hashed host names,
   `@revoked` lines for revoked keys so ssh refuses them. `ETag` support for cheap polling.
+- **Stacks and VIPs**: a virtual chassis answers SSH as one host; its keys are recorded on the master,
+  the stack name is added to the master's `known_hosts` entry and the members point to it. The virtual
+  IP of an FHRP group (VRRP, HSRP, …) moves between routers, so it is listed with the keys of every
+  member; OpenSSH accepts any of them, and a failover raises no warning.
 - **SSHFP export** as a zone file snippet.
 - **Report**: charts of key types, best key exchange offered and SSH software; hosts without key,
   stale keys, mismatches, weak keys (DSA, RSA below 2048 bits), duplicates (intended for HA pairs when
@@ -119,7 +123,8 @@ Give scanners and automation their own user and token, and people their own perm
 | `/plugins/ssh-fingerprint/sshfp/` | `/api/plugins/ssh-fingerprint/sshfp/` |
 
 Both take the host key filters (`site`, `tenant`, `role`, `host_tag`, `device_id`, …). `known-hosts`
-also takes `include=both|names|ips`, `hashed=1`, and `revoked=0` to leave out the `@revoked` lines.
+also takes `include=both|names|ips`, `hashed=1`, `revoked=0` to leave out the `@revoked` lines and
+`vips=0` to leave out the FHRP virtual IPs (both needed for Paramiko-based clients).
 
 ```bash
 curl -s -H "Authorization: Token $TOKEN" \

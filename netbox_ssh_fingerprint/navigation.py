@@ -11,6 +11,13 @@ pending = PluginMenuItem(
 )
 pending.url = format_lazy('{}?status=pending', reverse_lazy('plugins:netbox_ssh_fingerprint:hostkey_list'))
 
+mismatches = PluginMenuItem(
+    link='plugins:netbox_ssh_fingerprint:hostkey_list',
+    link_text=_('Mismatches'),
+    permissions=['netbox_ssh_fingerprint.view_hostkey'],
+)
+mismatches.url = format_lazy('{}?mismatch=true', reverse_lazy('plugins:netbox_ssh_fingerprint:hostkey_list'))
+
 menu = PluginMenu(
     label=_('SSH Fingerprint'),
     icon_class='mdi mdi-key-chain-variant',
@@ -32,6 +39,7 @@ menu = PluginMenu(
                 ),
             ),
             pending,
+            mismatches,
             PluginMenuItem(
                 link='plugins:netbox_ssh_fingerprint:report',
                 link_text=_('Report'),

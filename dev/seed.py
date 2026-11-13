@@ -12,9 +12,9 @@ from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed25519, rsa
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site, VirtualChassis
 from extras.models import Tag
-from ipam.models import IPAddress, Service
+from ipam.models import FHRPGroup, FHRPGroupAssignment, IPAddress, Service
 from tenancy.models import Tenant
 from virtualization.models import Cluster, ClusterType, VirtualMachine, VMInterface
 
@@ -324,6 +324,31 @@ for name in ('fw-bern-a', 'fw-bern-b'):
     address(host, next(V6))
     make_scan(host, 'host', str(ip.address), FORTI)
     make_key(host, 'ed25519', public_key=fw_key, shared=True, description='HA pair, same key on both members')
+
+# A switch stack: one SSH host, keys on the master, members without IP
+stack = get(VirtualChassis, name='stack-bern-a')
+for position in (1, 2, 3):
+    member = device(f'sw-stack-a{position}', 'Catalyst 9300', 'Switch', 'RZ Bern')
+    member.tags.add(demo_tag)
+    member.virtual_chassis, member.vc_position = stack, position
+    member.save()
+    if position == 1:
+        stack.master = member
+        stack.save()
+        ip = address(member, next(V4), 'stack-bern-a.net.example.net')
+        make_scan(member, 'host', str(ip.address), CISCO_IOSXE)
+        make_key(member, 'rsa3072')
+
+# VRRP between the core routers: the VIP is listed with the keys of both
+vrrp = get(FHRPGroup, protocol='vrrp3', group_id=10, defaults={'name': 'gw-bern'})
+vip = IPAddress.objects.filter(address='192.0.2.254/24').first() or IPAddress(address='192.0.2.254/24')
+vip.assigned_object = vrrp
+vip.dns_name = 'gw-bern.net.example.net'
+vip.save()
+for priority, name in ((200, 'rt-core-01'), (100, 'rt-core-02')):
+    iface = Interface.objects.get(device=hosts[name], name='mgmt0')
+    if not FHRPGroupAssignment.objects.filter(group=vrrp, interface_id=iface.pk).exists():
+        FHRPGroupAssignment(group=vrrp, interface=iface, priority=priority).save()
 
 # Mismatch: srv-bern-03 presented a new ed25519 key (re-installed? or someone else?)
 make_key(hosts['srv-bern-03'], 'ed25519', status='pending', source='scan')

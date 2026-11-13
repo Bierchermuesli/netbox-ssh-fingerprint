@@ -1,0 +1,10 @@
+{% load i18n %}
+<div class="card">
+  <h2 class="card-header">{% trans "SSH Host Keys" %}</h2>
+  <div class="card-body text-muted">
+    {% blocktrans trimmed with vc_url=vc.get_absolute_url vc_name=vc.name master_url=vc.master.get_absolute_url master=vc.master %}
+      Member of the stack <a href="{{ vc_url }}">{{ vc_name }}</a>, which answers SSH as one host.
+      Its keys are recorded on the master <a href="{{ master_url }}">{{ master }}</a>.
+    {% endblocktrans %}
+  </div>
+</div>
