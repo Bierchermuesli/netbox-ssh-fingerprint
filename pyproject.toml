@@ -6,6 +6,8 @@ readme = "README.md"
 license = "MIT"
 authors = [{ name = "Stefan Grosser" }]
 requires-python = ">=3.12"
+# Provided by NetBox; declared because the SSH probe uses it
+dependencies = ["cryptography"]
 classifiers = ["Framework :: Django", "Programming Language :: Python :: 3"]
 
 [project.urls]

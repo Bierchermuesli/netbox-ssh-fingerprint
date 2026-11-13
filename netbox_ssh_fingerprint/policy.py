@@ -1,6 +1,9 @@
 """
-Rates the algorithms an SSH server offers. Adapted from the ssh-audit hardening policies, the OpenSSH
-defaults and release notes, and BSI TR-02102-4.
+Rates the algorithms an SSH server offers.
+
+The lists in policy_data.py are generated from the algorithm database of ssh-audit
+(tools/update_policy.py) and checked against its latest release by a scheduled CI job. See the README
+for the sources and the deliberate deviations.
 
 Post-quantum readiness is about the key exchange: a recorded session can only be decrypted later
 ("store now, decrypt later") if the key exchange is broken. OpenSSH has no post-quantum host key
@@ -8,65 +11,12 @@ signatures yet, so host keys are rated classically.
 """
 from dataclasses import dataclass, field
 
-PQ_KEX = {
-    'mlkem768x25519-sha256',
-    'mlkem768nistp256-sha256',
-    'mlkem1024nistp384-sha384',
-    'sntrup761x25519-sha512',
-    'sntrup761x25519-sha512@openssh.com',
-}
-
-# Broken or too weak: SHA-1 or 1024-bit groups
-WEAK_KEX = {
-    'diffie-hellman-group1-sha1',
-    'diffie-hellman-group14-sha1',
-    'diffie-hellman-group-exchange-sha1',
-    'rsa1024-sha1',
-    'gss-group1-sha1-',
-    'gss-gex-sha1-',
-    'gss-group14-sha1-',
-}
-
-# ssh-rsa signs with SHA-1 (disabled by default since OpenSSH 8.8); DSA is gone since OpenSSH 10.0
-WEAK_HOST_KEY_ALGORITHMS = {
-    'ssh-dss',
-    'ssh-rsa',
-    'ssh-dss-cert-v01@openssh.com',
-    'ssh-rsa-cert-v01@openssh.com',
-}
-
-WEAK_CIPHERS = {
-    'none',
-    '3des-cbc',
-    'blowfish-cbc',
-    'cast128-cbc',
-    'arcfour',
-    'arcfour128',
-    'arcfour256',
-    'aes128-cbc',
-    'aes192-cbc',
-    'aes256-cbc',
-    'rijndael-cbc@lysator.liu.se',
-}
-
-WEAK_MACS = {
-    'none',
-    'hmac-md5',
-    'hmac-md5-96',
-    'hmac-md5-etm@openssh.com',
-    'hmac-md5-96-etm@openssh.com',
-    'hmac-sha1',
-    'hmac-sha1-96',
-    'hmac-sha1-etm@openssh.com',
-    'hmac-sha1-96-etm@openssh.com',
-    'hmac-ripemd160',
-    'hmac-ripemd160@openssh.com',
-    'umac-64@openssh.com',
-    'umac-64-etm@openssh.com',
-}
+from .policy_data import PQ_KEX, SOURCE, WEAK
 
 # Pseudo algorithms that only signal extensions
 _MARKERS = ('ext-info-', 'kex-strict-')
+
+__all__ = ('PQ_KEX', 'SOURCE', 'WEAK', 'Assessment', 'assess', 'weak_reason')
 
 
 @dataclass
@@ -83,17 +33,25 @@ class Assessment:
         return [f'{category}:{alg}' for category, algs in self.weak.items() for alg in algs]
 
 
-def _weak(offered, weak):
-    return [a for a in offered if a in weak or any(a.startswith(w) for w in weak if w.endswith('-'))]
+def weak_reason(category, algorithm):
+    """
+    Why the algorithm is weak, or None. Entries ending in * (e.g. gss-group1-sha1-*) match by prefix.
+    """
+    names = WEAK.get(category, {})
+    if algorithm in names:
+        return names[algorithm]
+    for name, reason in names.items():
+        if name.endswith('*') and algorithm.startswith(name[:-1]):
+            return reason
+    return None
 
 
 def assess(kex=(), host_key_algorithms=(), ciphers=(), macs=()):
     kex = [k for k in kex if not k.startswith(_MARKERS)]
+    offered = {'kex': kex, 'hostkey': host_key_algorithms, 'cipher': ciphers, 'mac': macs}
     weak = {
-        'kex': _weak(kex, WEAK_KEX),
-        'hostkey': _weak(host_key_algorithms, WEAK_HOST_KEY_ALGORITHMS),
-        'cipher': _weak(ciphers, WEAK_CIPHERS),
-        'mac': _weak(macs, WEAK_MACS),
+        category: [a for a in algorithms if weak_reason(category, a)]
+        for category, algorithms in offered.items()
     }
     return Assessment(
         pq_ready=any(k in PQ_KEX for k in kex),

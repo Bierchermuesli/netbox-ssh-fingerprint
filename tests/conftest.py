@@ -8,7 +8,7 @@ _PKG = Path(__file__).parent.parent / 'netbox_ssh_fingerprint'
 _pkg = types.ModuleType('nsf')
 _pkg.__path__ = [str(_PKG)]
 sys.modules['nsf'] = _pkg
-for _name in ('keys', 'policy', 'probe'):
+for _name in ('keys', 'policy_data', 'policy', 'probe'):
     _spec = importlib.util.spec_from_file_location(f'nsf.{_name}', _PKG / f'{_name}.py')
     _mod = importlib.util.module_from_spec(_spec)
     sys.modules[f'nsf.{_name}'] = _mod
