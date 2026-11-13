@@ -1,0 +1,8 @@
+# The plugin runs inside NetBox's environment and uses its libraries; NetBox updates them. Dependabot
+# keeps the CI actions current; NetBox and ssh-audit are covered by the scheduled workflow.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

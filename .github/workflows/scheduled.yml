@@ -1,0 +1,34 @@
+# Weekly: is the algorithm policy still in line with the latest ssh-audit, and does the plugin still
+# work with the latest NetBox release?
+name: Scheduled checks
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+jobs:
+  policy-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Compare policy_data.py with the latest ssh-audit
+        run: uvx --with ssh-audit pytest -q tests/test_policy_drift.py
+
+  netbox-latest:
+    runs-on: ubuntu-latest
+    env:
+      NETBOX_VERSION: latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the latest NetBox with the plugin
+        working-directory: dev
+        run: |
+          docker compose up -d --wait netbox ssh-10 ssh-9 ssh-8 ssh-7
+          docker compose run --rm seed
+      - name: Smoke test
+        working-directory: dev
+        run: |
+          docker compose exec -T netbox sh -c '/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < /demo/smoke.py' | tee smoke.log
+          grep -q 'SMOKE OK' smoke.log

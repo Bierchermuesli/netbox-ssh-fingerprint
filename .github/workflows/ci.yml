@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Lint
+        run: uvx ruff check --select F,E9 --line-length 120 netbox_ssh_fingerprint tests tools dev
+      - name: Unit tests and policy check against the pinned ssh-audit
+        run: uvx --with ssh-audit==3.9.0 pytest -q tests
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start NetBox with the plugin, demo data and SSH containers
+        working-directory: dev
+        run: |
+          docker compose up -d --wait netbox ssh-10 ssh-9 ssh-8 ssh-7
+          docker compose run --rm seed
+      - name: Smoke test
+        working-directory: dev
+        run: |
+          docker compose exec -T netbox sh -c '/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell < /demo/smoke.py' | tee smoke.log
+          grep -q 'SMOKE OK' smoke.log
