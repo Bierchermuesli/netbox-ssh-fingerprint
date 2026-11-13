@@ -126,6 +126,14 @@ try:
         r = c.get(Device.objects.get(name='ap-thun-01').get_absolute_url())
         check(r.status_code == 200 and 'SSH Host Keys' not in r.content.decode(), 'no card on an access point')
 
+        # UI fetch runs in the request and returns to the host page
+        r = c.post(f'/plugins/ssh-fingerprint/fetch/device/{old.pk}/', follow=True)
+        body = r.content.decode()
+        check(r.redirect_chain[-1][0] == old.get_absolute_url() and 'key(s) match' in body,
+              f'UI fetch: back on the device page with the result ({r.redirect_chain})')
+        r = c.post(f'/plugins/ssh-fingerprint/fetch/device/{Device.objects.get(name="srv-nokey-01").pk}/', follow=True)
+        check('not reachable' in r.content.decode(), 'UI fetch: unreachable host reported')
+
         # Exports
         r = c.get('/plugins/ssh-fingerprint/known-hosts/')
         kh = r.content.decode()
@@ -160,7 +168,11 @@ try:
         check(r.status_code == 200 and r.json()[0]['pq_ready'] is False, 'API scans')
         r = api.post('/api/plugins/ssh-fingerprint/fetch/', {'object_type': 'dcim.device', 'object_id': old.pk},
                      content_type='application/json')
-        check(r.status_code == 202 and r.json().get('job_id'), f'API fetch queues a job ({r.status_code} {r.content[:200]})')
+        check(r.status_code == 200 and r.json()[0]['reachable'] and r.json()[0]['matched'],
+              f'API fetch returns the result ({r.status_code} {r.content[:200]})')
+        r = api.post('/api/plugins/ssh-fingerprint/fetch/', {'object_type': 'dcim.device', 'object_id': old.pk,
+                     'background': True}, content_type='application/json')
+        check(r.status_code == 202 and r.json().get('job_id'), f'API fetch in background queues a job ({r.status_code})')
         r = api.get('/api/schema/')
         check(r.status_code == 200, 'API schema renders')
 

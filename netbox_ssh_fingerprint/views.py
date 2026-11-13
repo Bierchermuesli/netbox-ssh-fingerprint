@@ -16,6 +16,7 @@ from utilities.views import register_model_view
 from virtualization.models import VirtualMachine
 
 from . import actions, exports, filtersets, forms, reports, tables
+from .scan import summary
 from .models import HostKey
 
 HOST_MODELS = {'device': Device, 'virtualmachine': VirtualMachine}
@@ -156,16 +157,29 @@ def _get_host(request, model, pk):
     return get_object_or_404(HOST_MODELS[model].objects.restrict(request.user, 'view'), pk=pk)
 
 
+def _fetch_and_report(request, host):
+    """
+    Fetch synchronously and show one message per endpoint; changes are logged under the user.
+    """
+    try:
+        results = actions.fetch_now(host, request.user)
+    except PermissionDenied as e:
+        messages.error(request, str(e))
+        return
+    if not results:
+        messages.warning(request, f'{host} has no primary or out-of-band IP to connect to.')
+    for out in results:
+        level, text = summary(host, out)
+        getattr(messages, level)(request, text)
+
+
 class FetchView(LoginRequiredMixin, View):
     """
-    Queue a background job that fetches the host's keys and compares them with the stored ones.
+    Fetch the host's keys, compare them with the stored ones and return to the host page.
     """
     def post(self, request, model, pk):
         host = _get_host(request, model, pk)
-        job = _post_action(request, lambda: actions.enqueue_fetch(host, request.user),
-                           lambda job: f'Fetching SSH host keys of {host} (job {job.pk})')
-        if job:
-            return redirect(job.get_absolute_url())
+        _fetch_and_report(request, host)
         return redirect(host.get_absolute_url())
 
 
@@ -178,8 +192,7 @@ class ReplaceHardwareView(LoginRequiredMixin, View):
         revoked = _post_action(request, lambda: actions.replace_hardware(host, request.user),
                                lambda keys: f'Revoked {len(keys)} key(s) of {host}')
         if revoked is not None and actions.can_fetch(request.user):
-            job = actions.enqueue_fetch(host, request.user)
-            return redirect(job.get_absolute_url())
+            _fetch_and_report(request, host)
         return redirect(host.get_absolute_url())
 
 

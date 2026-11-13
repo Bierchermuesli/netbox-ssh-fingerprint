@@ -17,6 +17,7 @@ from netbox.api.viewsets import NetBoxModelViewSet
 from .. import actions, exports, filtersets
 from ..models import EndpointScan, HostKey
 from ..views import HOST_MODELS, export_options, filtered_keys
+from ..scan import summary
 from .serializers import EndpointScanSerializer, HostKeySerializer
 
 
@@ -65,7 +66,8 @@ def _host(request):
 
 class FetchView(APIView):
     """
-    POST {"object_type": "dcim.device", "object_id": 1}: queue a job that fetches and verifies the host's keys.
+    POST {"object_type": "dcim.device", "object_id": 1}: fetch and verify the host's keys right away and
+    return the result per endpoint. With "background": true, queue a job instead (202).
     """
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
@@ -73,9 +75,21 @@ class FetchView(APIView):
     def post(self, request):
         if not actions.can_fetch(request.user):
             raise APIPermissionDenied('Fetching host keys requires the fetch permission.')
-        job = _run(lambda: actions.enqueue_fetch(_host(request), request.user))
-        return Response({'job_id': job.pk, 'job_url': request.build_absolute_uri(
-            f'/api/core/jobs/{job.pk}/')}, status=status.HTTP_202_ACCEPTED)
+        host = _host(request)
+        if request.data.get('background'):
+            job = _run(lambda: actions.enqueue_fetch(host, request.user))
+            return Response({'job_id': job.pk, 'job_url': request.build_absolute_uri(
+                f'/api/core/jobs/{job.pk}/')}, status=status.HTTP_202_ACCEPTED)
+        results = _run(lambda: actions.fetch_now(host, request.user))
+        return Response([{
+            'endpoint': out.endpoint,
+            'address': out.address,
+            'reachable': out.reachable,
+            'error': out.error,
+            'summary': summary(host, out)[1],
+            **{name: [k.pk for k in getattr(out, name)]
+               for name in ('matched', 'new_active', 'new_pending', 'mismatched', 'revoked_seen')},
+        } for out in results])
 
 
 class ScanView(APIView):

@@ -7,6 +7,7 @@ from django.db import transaction
 from .choices import HostKeyStatusChoices
 from .jobs import FetchHostKeysJob
 from .models import APPROVE_PERMISSION, FETCH_PERMISSION, HostKey
+from .scan import scan_host
 
 
 def _save(key, status):
@@ -57,6 +58,16 @@ def replace_hardware(host, user):
 
 def can_fetch(user):
     return user.has_perm(FETCH_PERMISSION)
+
+
+def fetch_now(host, user):
+    """
+    Fetch and verify in the current request. A reachable host takes well under a second; an unreachable
+    one up to fetch_timeout per address.
+    """
+    if not can_fetch(user):
+        raise PermissionDenied('Fetching host keys requires the fetch permission.')
+    return scan_host(host)
 
 
 def enqueue_fetch(host, user):

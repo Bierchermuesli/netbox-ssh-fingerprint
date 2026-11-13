@@ -161,3 +161,27 @@ def _log(logger, host, out):
         logger.error(f'{label}: host presents the REVOKED {key.key_type} key {key.fingerprint_sha256}')
     if out.error:
         logger.warning(f'{label}: {out.error}')
+
+
+def summary(host, out):
+    """
+    One line per endpoint for the UI: (level, text) with level success, info, warning or error.
+    """
+    where = 'OOB' if out.endpoint == HostKeyEndpointChoices.OOB else 'SSH'
+    label = f'{host} {where} ({out.address})'
+    if not out.reachable:
+        return 'error', f'{label}: not reachable. {out.error}'
+    if out.revoked_seen:
+        return 'error', f'{label}: presents a REVOKED key ({", ".join(k.key_type for k in out.revoked_seen)})'
+    if out.mismatched:
+        return 'error', f'{label}: key differs from the active one ({", ".join(k.key_type for k in out.mismatched)}); ' \
+                        f'the new key waits for approval'
+    parts = []
+    if out.matched:
+        parts.append(f'{len(out.matched)} key(s) match')
+    if out.new_active:
+        parts.append(f'{len(out.new_active)} recorded and accepted (host is being set up)')
+    if out.new_pending:
+        parts.append(f'{len(out.new_pending)} new, waiting for approval')
+    level = 'warning' if out.new_pending else 'success'
+    return level, f'{label}: ' + (', '.join(parts) or 'no keys')
