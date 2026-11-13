@@ -45,13 +45,23 @@ A hostname proves nothing; the host key is the only thing cryptographically boun
   computers exist (store now, decrypt later). OpenSSH has no post-quantum host key signatures yet, so
   this is about the key exchange only.
 - **Hardware replaced / re-installed**: revokes the active keys of a host and fetches the new ones.
+- **Bulk approve** from the key list. Keys that would replace an active key (mismatches) are left out
+  unless explicitly included. Quick filters on the list: pending, mismatches, active, revoked; the menu
+  has a *Pending approval* entry.
+- **known_hosts import** for the migration from an existing tool: each line is matched to a device or
+  VM by name, DNS name or IP. Lines without a host in NetBox are listed, not imported, and show the
+  gaps in the inventory; no placeholder hosts are created. The preview shows what will happen; keys
+  already recorded are skipped, so the import can be repeated. Also via API and
+  `manage.py import_known_hosts`.
 - **`known_hosts` export** filtered by site, tenant, role or tag: host names, IPv4 and IPv6 addresses
   or both, `[host]:port` for a NetBox service named `ssh` on another port, optional hashed host names,
   `@revoked` lines for revoked keys so ssh refuses them. `ETag` support for cheap polling.
 - **SSHFP export** as a zone file snippet.
-- **Report**: hosts without key, stale keys, mismatches, weak keys (DSA, RSA below 2048 bits),
-  duplicates (intended for HA pairs when marked as shared, otherwise usually a cloned VM image),
-  post-quantum readiness, weak algorithms, SSH software in use, unreachable hosts.
+- **Report**: charts of key types, best key exchange offered and SSH software; hosts without key,
+  stale keys, mismatches, weak keys (DSA, RSA below 2048 bits), duplicates (intended for HA pairs when
+  marked as shared, otherwise usually a cloned VM image), post-quantum readiness, weak algorithms,
+  unreachable hosts. Each section links to the full list: the key list with a filter, or the regular
+  NetBox device and VM tables with all their filters, pagination and CSV export.
 - **REST API** for everything, including approve, revoke, fetch and the exports.
 
 ## Installation
@@ -117,11 +127,21 @@ curl -s -H "Authorization: Token $TOKEN" \
   > /etc/ssh/ssh_known_hosts.d/netbox
 ```
 
+Migrating from an existing known_hosts file:
+
+```bash
+python manage.py import_known_hosts /path/to/known_hosts --user admin              # dry run
+python manage.py import_known_hosts /path/to/known_hosts --user admin --status active --apply
+```
+
 How to use the file with OpenSSH, Ansible, Netmiko and Paramiko: [docs/clients.md](docs/clients.md).
 
 ## API
 
-- `/api/plugins/ssh-fingerprint/host-keys/`: CRUD; `POST …/{id}/approve/`, `POST …/{id}/revoke/`
+- `/api/plugins/ssh-fingerprint/host-keys/`: CRUD; `POST …/{id}/approve/`, `POST …/{id}/revoke/`;
+  `POST …/approve/` with `{"ids": [...], "include_mismatches": false}` for many keys
+- `POST /api/plugins/ssh-fingerprint/import-known-hosts/` with `{"data": "...", "status": "pending",
+  "dry_run": true}`
 - `POST /api/plugins/ssh-fingerprint/fetch/` with `{"object_type": "dcim.device", "object_id": 1}`:
   fetches right away and returns the result; add `"background": true` to queue a job instead
 - `GET /api/plugins/ssh-fingerprint/scans/?object_type=dcim.device&object_id=1`
