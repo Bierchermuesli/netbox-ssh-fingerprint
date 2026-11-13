@@ -13,5 +13,6 @@ urlpatterns = [
     path('sshfp/', views.SSHFPView.as_view(), name='sshfp'),
     path('fetch/', views.FetchView.as_view(), name='fetch'),
     path('scans/', views.ScanView.as_view(), name='scans'),
+    path('import-known-hosts/', views.ImportKnownHostsView.as_view(), name='import-known-hosts'),
     *router.urls,
 ]

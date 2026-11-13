@@ -1,21 +1,28 @@
 import hashlib
+import uuid
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db.models import Count
 from django.http import Http404, HttpResponse, HttpResponseNotModified
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 
 from dcim.models import Device
 from extras.ui.panels import CustomFieldsPanel, TagsPanel
 from netbox.ui import attrs, layout, panels
+from netbox.object_actions import BulkExport
 from netbox.views import generic
 from utilities.views import register_model_view
 from virtualization.models import VirtualMachine
 
-from . import actions, exports, filtersets, forms, reports, tables
+from . import actions, exports, filtersets, forms, importer, reports, tables
+from .choices import HostKeyStatusChoices
 from .scan import summary
 from .models import HostKey
 
@@ -48,6 +55,26 @@ class HostKeyListView(generic.ObjectListView):
     filterset_form = forms.HostKeyFilterForm
     table = tables.HostKeyTable
     template_name = 'netbox_ssh_fingerprint/hostkey_list.html'
+
+    def get_extra_context(self, request):
+        """
+        Counts for the quick filters above the list.
+        """
+        visible = HostKey.objects.restrict(request.user, 'view')
+        mismatch = filtersets.HostKeyFilterSet({'mismatch': 'true'}, visible).qs.count()
+        counts = dict(visible.values_list('status').annotate(n=Count('pk')).values_list('status', 'n'))
+        current = request.GET.urlencode()
+        quick = [
+            ('Pending', 'status=pending', counts.get('pending', 0), 'yellow'),
+            ('Mismatches', 'mismatch=true', mismatch, 'red'),
+            ('Active', 'status=active', counts.get('active', 0), 'green'),
+            ('Revoked', 'status=revoked', counts.get('revoked', 0), 'gray'),
+            ('All', '', sum(counts.values()), 'blue'),
+        ]
+        return {'quick_filters': [
+            {'label': label, 'query': query, 'count': count, 'color': color, 'current': query == current}
+            for label, query, count, color in quick
+        ]}
 
 
 @register_model_view(HostKey)
@@ -115,6 +142,91 @@ class HostKeyBulkDeleteView(generic.BulkDeleteView):
     queryset = HostKey.objects.all()
     filterset = filtersets.HostKeyFilterSet
     table = tables.HostKeyTable
+
+
+@register_model_view(HostKey, 'bulk_approve', path='approve', detail=False)
+class HostKeyBulkApproveView(LoginRequiredMixin, View):
+    """
+    From the key list: approve the selected keys. Keys that would replace an active key (mismatches)
+    are left out unless explicitly included.
+    """
+    def post(self, request):
+        queryset = HostKey.objects.restrict(request.user, 'view').select_related('device', 'virtual_machine')
+        if request.POST.get('_all'):
+            keys = list(filtersets.HostKeyFilterSet(request.GET, queryset, request=request).qs)
+        else:
+            keys = list(queryset.filter(pk__in=request.POST.getlist('pk')))
+        return_url = request.GET.get('return_url', '')
+        if not url_has_allowed_host_and_scheme(return_url, allowed_hosts={request.get_host()}):
+            return_url = reverse('plugins:netbox_ssh_fingerprint:hostkey_list')
+
+        if '_confirm' not in request.POST:
+            return render(request, 'netbox_ssh_fingerprint/bulk_approve.html', {
+                'groups': actions.classify_for_approval(keys),
+                'pks': [k.pk for k in keys],
+                'return_url': return_url,
+            })
+        try:
+            groups, approved, errors = actions.bulk_approve(
+                keys, request.user, include_mismatches=bool(request.POST.get('include_mismatches')))
+        except PermissionDenied as e:
+            messages.error(request, str(e))
+            return redirect(return_url)
+        messages.success(request, f'Approved {len(approved)} host key(s)')
+        skipped = len(groups['conflict']) + (0 if request.POST.get('include_mismatches') else len(groups['mismatch']))
+        if skipped:
+            messages.warning(request, f'Skipped {skipped} key(s): mismatches or several keys for the same slot')
+        for key, error in errors[:10]:
+            messages.error(request, f'{key}: {error}')
+        return redirect(return_url)
+
+
+@register_model_view(HostKey, 'import_known_hosts', path='import-known-hosts', detail=False)
+class ImportKnownHostsView(LoginRequiredMixin, View):
+    """
+    Import a known_hosts file in two steps: preview the matching, then apply. The file is kept in the
+    cache between the steps, so large files need no second upload.
+    """
+    template_name = 'netbox_ssh_fingerprint/import_known_hosts.html'
+
+    def _check(self, request):
+        if not request.user.has_perm('netbox_ssh_fingerprint.add_hostkey'):
+            raise PermissionDenied
+
+    def get(self, request):
+        self._check(request)
+        return render(request, self.template_name, {'can_approve': request.user.has_perm(
+            'netbox_ssh_fingerprint.approve_hostkey')})
+
+    def post(self, request):
+        self._check(request)
+        status = request.POST.get('status') or HostKeyStatusChoices.PENDING
+        if status not in (HostKeyStatusChoices.ACTIVE, HostKeyStatusChoices.PENDING):
+            status = HostKeyStatusChoices.PENDING
+        if '_apply' in request.POST:
+            text = cache.get(f'nsf-import-{request.POST.get("token")}')
+            if text is None:
+                messages.error(request, 'The preview expired, please upload the file again.')
+                return redirect(request.path)
+            plan = importer.plan_import(text, request.user)
+            created, errors = importer.apply_import(plan, status)
+            messages.success(request, f'Imported {len(created)} host key(s)')
+            for lineno, error in errors[:10]:
+                messages.error(request, f'Line {lineno}: {error}')
+            return redirect('plugins:netbox_ssh_fingerprint:hostkey_list')
+
+        upload = request.FILES.get('file')
+        text = upload.read().decode('utf-8', 'replace') if upload else request.POST.get('data', '')
+        token = uuid.uuid4().hex
+        cache.set(f'nsf-import-{token}', text, 3600)
+        plan = importer.plan_import(text, request.user)
+        return render(request, self.template_name, {
+            'plan': plan,
+            'token': token,
+            'status': status,
+            'can_approve': request.user.has_perm('netbox_ssh_fingerprint.approve_hostkey'),
+            'limit': 200,
+        })
 
 
 def _post_action(request, func, success):
@@ -252,6 +364,33 @@ class SSHFPView(LoginRequiredMixin, View):
         return text_response(request, exports.sshfp_zone(filtered_keys(request)), 'sshfp.zone')
 
 
+class HostReportListView(generic.ObjectListView):
+    """
+    The regular NetBox device or VM table, limited to the hosts of one report section, with all the
+    usual filters, pagination and export.
+    """
+    template_name = 'netbox_ssh_fingerprint/host_report_list.html'
+    actions = (BulkExport,)
+
+    def dispatch(self, request, *args, model=None, kind=None, **kwargs):
+        config = reports.host_list_config(model)
+        if config is None or kind not in reports.HOST_KINDS:
+            raise Http404
+        self.kind = kind
+        self.model_label = config['label']
+        self.queryset = reports.host_kind_queryset(config['model'], kind, request.GET.get('algorithm'))
+        self.filterset = config['filterset']
+        self.filterset_form = config['filterset_form']
+        self.table = config['table']
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_extra_context(self, request):
+        title = reports.HOST_KINDS[self.kind]
+        if request.GET.get('algorithm'):
+            title += f': {request.GET["algorithm"]}'
+        return {'report_title': f'{self.model_label} {title}'}
+
+
 class ReportView(LoginRequiredMixin, View):
     def get(self, request):
         if not request.user.has_perm('netbox_ssh_fingerprint.view_hostkey'):
@@ -268,4 +407,5 @@ class ReportView(LoginRequiredMixin, View):
             'weak_count': weak_count, 'weak_types': weak_types, 'weak_keys': weak_list,
             'dup_count': dup_count, 'duplicates': dup_rows,
             'alg': reports.algorithms(user),
+            'charts': reports.charts(user),
         })

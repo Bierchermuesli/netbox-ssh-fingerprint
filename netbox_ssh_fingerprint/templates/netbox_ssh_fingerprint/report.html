@@ -5,38 +5,73 @@
 
 {% block content %}
 {% url 'plugins:netbox_ssh_fingerprint:hostkey_list' as list_url %}
+{% url 'plugins:netbox_ssh_fingerprint:report_hosts' model='devices' kind='without-key' as dev_nokey %}
+{% url 'plugins:netbox_ssh_fingerprint:report_hosts' model='virtual-machines' kind='without-key' as vm_nokey %}
+{% url 'plugins:netbox_ssh_fingerprint:report_hosts' model='devices' kind='no-pq' as dev_nopq %}
+{% url 'plugins:netbox_ssh_fingerprint:report_hosts' model='virtual-machines' kind='no-pq' as vm_nopq %}
+{% url 'plugins:netbox_ssh_fingerprint:report_hosts' model='devices' kind='unreachable' as dev_unreach %}
+{% url 'plugins:netbox_ssh_fingerprint:report_hosts' model='virtual-machines' kind='unreachable' as vm_unreach %}
+{% url 'plugins:netbox_ssh_fingerprint:report_hosts' model='devices' kind='weak-algorithms' as dev_weakalg %}
+{% url 'plugins:netbox_ssh_fingerprint:report_hosts' model='virtual-machines' kind='weak-algorithms' as vm_weakalg %}
+
+{# Charts #}
+<div class="row row-cards mb-3">
+  {% for title, chart in charts %}
+    <div class="col-md-4">
+      <div class="card h-100">
+        <h2 class="card-header">{{ title }}</h2>
+        <div class="card-body d-flex align-items-center gap-3">
+          {{ chart.svg }}
+          <table class="table table-sm table-borderless mb-0 small">
+            {% for label, value, percent, color in chart.legend %}
+              <tr>
+                <td class="px-0"><span class="d-inline-block rounded-circle me-1" style="width:.65rem;height:.65rem;background:{{ color }}"></span>{{ label }}</td>
+                <td class="text-end">{{ value }}</td>
+                <td class="text-end text-muted">{{ percent }}%</td>
+              </tr>
+            {% empty %}
+              <tr><td class="text-muted">{% trans "No data yet" %}</td></tr>
+            {% endfor %}
+          </table>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+{# Numbers #}
 <div class="row row-cards mb-3">
   {% for label, count, hosts in without_key %}
     <div class="col-sm-6 col-lg-2">
-      <div class="card card-sm"><div class="card-body">
+      <a href="{% if forloop.first %}{{ dev_nokey }}{% else %}{{ vm_nokey }}{% endif %}" class="card card-sm card-link"><div class="card-body">
         <div class="text-muted">{{ label|bettertitle }} {% trans "without key" %}</div>
         <div class="h1 mb-0 {% if count %}text-orange{% endif %}">{{ count }}</div>
-      </div></div>
+      </div></a>
     </div>
   {% endfor %}
   <div class="col-sm-6 col-lg-2">
-    <a href="{{ list_url }}?status=pending" class="card card-sm card-link"><div class="card-body">
+    <a href="{{ list_url }}?mismatch=true" class="card card-sm card-link"><div class="card-body">
       <div class="text-muted">{% trans "Mismatches" %}</div>
       <div class="h1 mb-0 {% if mismatch_count %}text-red{% endif %}">{{ mismatch_count }}</div>
     </div></a>
   </div>
   <div class="col-sm-6 col-lg-2">
-    <a href="{{ list_url }}?weak=true" class="card card-sm card-link"><div class="card-body">
+    <a href="{{ list_url }}?weak=true&status=active&status=pending" class="card card-sm card-link"><div class="card-body">
       <div class="text-muted">{% trans "Weak keys" %}</div>
       <div class="h1 mb-0 {% if weak_count %}text-red{% endif %}">{{ weak_count }}</div>
     </div></a>
   </div>
   <div class="col-sm-6 col-lg-2">
-    <div class="card card-sm"><div class="card-body">
+    <a href="{{ list_url }}?duplicate=true" class="card card-sm card-link"><div class="card-body">
       <div class="text-muted">{% trans "Duplicate keys" %}</div>
       <div class="h1 mb-0 {% if dup_count %}text-orange{% endif %}">{{ dup_count }}</div>
-    </div></div>
+    </div></a>
   </div>
   <div class="col-sm-6 col-lg-2">
-    <div class="card card-sm"><div class="card-body">
+    <a href="{{ dev_nopq }}" class="card card-sm card-link"><div class="card-body">
       <div class="text-muted">{% trans "Post-quantum KEX" %}</div>
       <div class="h1 mb-0">{{ alg.pq_ready }} <span class="h4 text-muted">/ {{ alg.reachable }}</span></div>
-    </div></div>
+    </div></a>
   </div>
 </div>
 
@@ -44,7 +79,9 @@
   <div class="col-lg-6">
 
     <div class="card">
-      <h2 class="card-header">{% trans "Mismatches" %}</h2>
+      <h2 class="card-header">{% trans "Mismatches" %}
+        {% if mismatch_count > mismatches|length %}<div class="card-actions"><a href="{{ list_url }}?mismatch=true" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=mismatch_count %}Show all {{ n }}{% endblocktrans %}</a></div>{% endif %}
+      </h2>
       <div class="card-body text-muted small pb-0">
         {% trans "The host presented a different key than the active one on record. Either the host was re-installed or replaced, or something answers in its place. Check before approving." %}
       </div>
@@ -52,7 +89,12 @@
     </div>
 
     <div class="card">
-      <h2 class="card-header">{% trans "Stale keys" %}</h2>
+      <h2 class="card-header">{% trans "Stale keys" %}
+        <div class="card-actions">
+          {% if stale_count %}<a href="{{ list_url }}?stale=true" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=stale_count %}Stale: {{ n }}{% endblocktrans %}</a>{% endif %}
+          {% if never_seen %}<a href="{{ list_url }}?never_seen=true" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=never_seen %}Never verified: {{ n }}{% endblocktrans %}</a>{% endif %}
+        </div>
+      </h2>
       <div class="card-body small">
         {% blocktrans trimmed %}
           <strong>{{ stale_count }}</strong> active keys were not seen by a scan for more than {{ stale_days }} days,
@@ -63,7 +105,9 @@
     </div>
 
     <div class="card">
-      <h2 class="card-header">{% trans "Weak keys" %}</h2>
+      <h2 class="card-header">{% trans "Weak keys" %}
+        {% if weak_count > weak_keys|length %}<div class="card-actions"><a href="{{ list_url }}?weak=true&status=active&status=pending" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=weak_count %}Show all {{ n }}{% endblocktrans %}</a></div>{% endif %}
+      </h2>
       <div class="card-body small">
         {% for label, count in weak_types %}<span class="badge text-bg-red me-1">{{ label }}: {{ count }}</span>{% endfor %}
         <div class="text-muted mt-1">{% trans "DSA and RSA below 2048 bits. Generate a new Ed25519 key on these hosts." %}</div>
@@ -72,7 +116,9 @@
     </div>
 
     <div class="card">
-      <h2 class="card-header">{% trans "Duplicate keys" %}</h2>
+      <h2 class="card-header">{% trans "Duplicate keys" %}
+        {% if dup_count %}<div class="card-actions"><a href="{{ list_url }}?duplicate=true" class="btn btn-ghost-primary btn-sm">{% trans "Show keys" %}</a></div>{% endif %}
+      </h2>
       <div class="card-body text-muted small pb-0">
         {% trans "The same key on several hosts. Intended for HA pairs and VIPs (marked as shared), otherwise usually a cloned VM image whose host keys were never regenerated." %}
       </div>
@@ -93,7 +139,12 @@
   <div class="col-lg-6">
 
     <div class="card">
-      <h2 class="card-header">{% trans "Post-quantum readiness" %}</h2>
+      <h2 class="card-header">{% trans "Post-quantum readiness" %}
+        <div class="card-actions">
+          {% if alg.not_pq_hosts.0 %}<a href="{{ dev_nopq }}" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=alg.not_pq_hosts.0 %}{{ n }} devices{% endblocktrans %}</a>{% endif %}
+          {% if alg.not_pq_hosts.1 %}<a href="{{ vm_nopq }}" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=alg.not_pq_hosts.1 %}{{ n }} VMs{% endblocktrans %}</a>{% endif %}
+        </div>
+      </h2>
       <div class="card-body small">
         <p>
           {% blocktrans trimmed with pq=alg.pq_ready reachable=alg.reachable scanned=alg.scanned %}
@@ -120,16 +171,24 @@
     </div>
 
     <div class="card">
-      <h2 class="card-header">{% trans "Weak algorithms offered" %}</h2>
+      <h2 class="card-header">{% trans "Weak algorithms offered" %}
+        <div class="card-actions">
+          {% if alg.weak_hosts.0 %}<a href="{{ dev_weakalg }}" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=alg.weak_hosts.0 %}{{ n }} devices{% endblocktrans %}</a>{% endif %}
+          {% if alg.weak_hosts.1 %}<a href="{{ vm_weakalg }}" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=alg.weak_hosts.1 %}{{ n }} VMs{% endblocktrans %}</a>{% endif %}
+        </div>
+      </h2>
       <div class="card-body small text-muted pb-0">
         {% blocktrans trimmed with count=alg.with_weak %}
-          {{ count }} endpoints still offer algorithms that ssh-audit, BSI TR-02102-4 or current OpenSSH consider
-          broken or weak (SHA-1, 1024-bit DH, CBC and 3DES ciphers, MD5 MACs, ssh-rsa signatures).
+          {{ count }} endpoints still offer algorithms rated broken or weak (SHA-1, 1024-bit DH, CBC and 3DES
+          ciphers, MD5 MACs, ssh-rsa signatures). Click an algorithm for the devices offering it.
         {% endblocktrans %}
       </div>
       <table class="table table-hover">
-        {% for name, count in alg.weak_algorithms %}
-          <tr><td class="font-monospace small">{{ name }}</td><td class="text-end">{{ count }}</td></tr>
+        {% for name, count in alg.weak_algorithms|slice:":15" %}
+          <tr>
+            <td class="font-monospace small"><a href="{{ dev_weakalg }}?algorithm={{ name|urlencode }}">{{ name }}</a></td>
+            <td class="text-end">{{ count }}</td>
+          </tr>
         {% empty %}
           <tr><td class="text-muted">{% trans "None" %}</td></tr>
         {% endfor %}
@@ -137,19 +196,14 @@
     </div>
 
     <div class="card">
-      <h2 class="card-header">{% trans "SSH software" %}</h2>
-      <table class="table table-hover">
-        {% for banner, count in alg.software %}
-          <tr><td class="font-monospace small">{{ banner }}</td><td class="text-end">{{ count }}</td></tr>
-        {% empty %}
-          <tr><td class="text-muted">{% trans "No scans yet" %}</td></tr>
-        {% endfor %}
-      </table>
-    </div>
-
-    <div class="card">
-      <h2 class="card-header">{% trans "Hosts without key" %}</h2>
-      <div class="card-body text-muted small pb-0">{% trans "Devices and VMs with a primary IP but no active host key." %}</div>
+      <h2 class="card-header">{% trans "Hosts without key" %}
+        <div class="card-actions">
+          {% for label, count, hosts in without_key %}
+            {% if count %}<a href="{% if forloop.first %}{{ dev_nokey }}{% else %}{{ vm_nokey }}{% endif %}" class="btn btn-ghost-primary btn-sm">{{ count }} {{ label }}</a>{% endif %}
+          {% endfor %}
+        </div>
+      </h2>
+      <div class="card-body text-muted small pb-0">{% trans "Devices and VMs in scope with a primary IP but no active host key." %}</div>
       <table class="table table-hover">
         {% for label, count, hosts in without_key %}
           {% for host in hosts %}
@@ -160,7 +214,12 @@
     </div>
 
     <div class="card">
-      <h2 class="card-header">{% trans "Not reachable" %}</h2>
+      <h2 class="card-header">{% trans "Not reachable" %}
+        <div class="card-actions">
+          {% if alg.unreachable_hosts.0 %}<a href="{{ dev_unreach }}" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=alg.unreachable_hosts.0 %}{{ n }} devices{% endblocktrans %}</a>{% endif %}
+          {% if alg.unreachable_hosts.1 %}<a href="{{ vm_unreach }}" class="btn btn-ghost-primary btn-sm">{% blocktrans with n=alg.unreachable_hosts.1 %}{{ n }} VMs{% endblocktrans %}</a>{% endif %}
+        </div>
+      </h2>
       <table class="table table-hover">
         {% for scan in alg.unreachable %}
           <tr>

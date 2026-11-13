@@ -1,0 +1,118 @@
+{% extends 'generic/_base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Import known_hosts" %}{% endblock %}
+
+{% block content %}
+{% if not plan %}
+  <form method="post" enctype="multipart/form-data" class="form">
+    {% csrf_token %}
+    <div class="card">
+      <h2 class="card-header">{% trans "Import known_hosts" %}</h2>
+      <div class="card-body">
+        <p class="text-muted">
+          {% trans "Each line is matched to a device or VM by its name, the DNS name of a primary or out-of-band IP, or the IP itself. Lines that match no host are listed, not imported: add the host to NetBox and import again. Keys already recorded are skipped, so the import can be repeated." %}
+        </p>
+        <div class="mb-3">
+          <label class="form-label" for="file">{% trans "File" %}</label>
+          <input class="form-control" type="file" name="file" id="file">
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="data">{% trans "or paste" %}</label>
+          <textarea class="form-control font-monospace" name="data" id="data" rows="8" placeholder="sw-bern-01,192.0.2.10 ssh-ed25519 AAAA…"></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="status">{% trans "Status of new keys" %}</label>
+          <select class="form-select" name="status" id="status">
+            <option value="pending">{% trans "Pending: approve after review" %}</option>
+            {% if can_approve %}<option value="active">{% trans "Active: the file comes from a trusted source" %}</option>{% endif %}
+          </select>
+          <div class="form-text">{% trans "Keys that would replace an active key are always imported as pending; @revoked lines as revoked." %}</div>
+        </div>
+      </div>
+      <div class="card-footer text-end">
+        <button type="submit" name="_preview" class="btn btn-primary">{% trans "Preview" %}</button>
+      </div>
+    </div>
+  </form>
+{% else %}
+  <form method="post" class="form">
+    {% csrf_token %}
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="status" value="{{ status }}">
+    <div class="card">
+      <h2 class="card-header">{% trans "Preview" %}</h2>
+      <div class="card-body">
+        <span class="badge text-bg-green">{{ plan.counts.new }} {% trans "new" %}</span>
+        <span class="badge text-bg-red">{{ plan.counts.mismatch }} {% trans "differ from the active key (pending)" %}</span>
+        <span class="badge text-bg-gray">{{ plan.counts.existing }} {% trans "already recorded" %}</span>
+        <span class="badge text-bg-orange">{{ plan.counts.unmatched }} {% trans "no host in NetBox" %}</span>
+        <span class="badge text-bg-orange">{{ plan.counts.ambiguous }} {% trans "ambiguous" %}</span>
+        <span class="badge text-bg-red">{{ plan.counts.errors }} {% trans "unreadable" %}</span>
+        <p class="mt-2 mb-0">{% blocktrans %}New keys will be imported as <strong>{{ status }}</strong>.{% endblocktrans %}</p>
+      </div>
+      <div class="card-footer text-end">
+        <a href="" class="btn btn-outline-secondary">{% trans "Back" %}</a>
+        <button type="submit" name="_apply" class="btn btn-primary" {% if not plan.counts.new and not plan.counts.mismatch %}disabled{% endif %}>{% trans "Import" %}</button>
+      </div>
+    </div>
+  </form>
+
+  <div class="row">
+    <div class="col-lg-6">
+      <div class="card">
+        <h2 class="card-header">{% trans "Matched" %}</h2>
+        <table class="table table-hover">
+          {% for item in plan.items|slice:limit %}
+            <tr>
+              <td class="small text-muted">{{ item.entry.lineno }}</td>
+              <td><a href="{{ item.host.get_absolute_url }}">{{ item.host }}</a>{% if item.endpoint == 'oob' %} <span class="badge text-bg-blue">OOB</span>{% endif %}</td>
+              <td class="small">{{ item.entry.key.key_type }}{% if item.entry.revoked %} <span class="badge text-bg-red">revoked</span>{% endif %}</td>
+              <td>
+                {% if item.category == 'new' %}<span class="badge text-bg-green">new</span>
+                {% elif item.category == 'mismatch' %}<span class="badge text-bg-red">differs</span>
+                {% else %}<span class="badge text-bg-gray">recorded</span>{% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td class="text-muted">{% trans "None" %}</td></tr>
+          {% endfor %}
+        </table>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card">
+        <h2 class="card-header">{% trans "No host in NetBox" %}</h2>
+        <div class="card-body small text-muted pb-0">{% trans "Reachable by SSH according to the file, but unknown to NetBox or without a matching IP: gaps in the inventory." %}</div>
+        <table class="table table-hover">
+          {% for lineno, patterns in plan.unmatched|slice:limit %}
+            <tr><td class="small text-muted">{{ lineno }}</td><td class="font-monospace small">{{ patterns|join:", " }}</td></tr>
+          {% empty %}
+            <tr><td class="text-muted">{% trans "None" %}</td></tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% if plan.ambiguous %}
+        <div class="card">
+          <h2 class="card-header">{% trans "Ambiguous" %}</h2>
+          <table class="table table-hover">
+            {% for lineno, patterns, hosts in plan.ambiguous|slice:limit %}
+              <tr><td class="small text-muted">{{ lineno }}</td><td class="font-monospace small">{{ patterns|join:", " }}</td><td class="small">{{ hosts|join:", " }}</td></tr>
+            {% endfor %}
+          </table>
+        </div>
+      {% endif %}
+      {% if plan.errors %}
+        <div class="card">
+          <h2 class="card-header">{% trans "Unreadable lines" %}</h2>
+          <table class="table table-hover">
+            {% for lineno, error in plan.errors|slice:limit %}
+              <tr><td class="small text-muted">{{ lineno }}</td><td class="small">{{ error }}</td></tr>
+            {% endfor %}
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

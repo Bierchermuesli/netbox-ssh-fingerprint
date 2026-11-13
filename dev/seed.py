@@ -241,7 +241,7 @@ for i in range(1, 9):
     PLAN.append((f'vm-app-{i:02d}', None, None, None, OPENSSH_10 if i <= 5 else OPENSSH_89,
                  ['ed25519', 'ecdsa256', 'rsa3072'], rng.choice(['dual', 'v4', 'v6'])))
 for i in range(1, 4):
-    PLAN.append((f'vm-clone-{i:02d}', None, None, None, OPENSSH_89, ['ed25519'], 'v4'))
+    PLAN.append((f'vm-clone-{i:02d}', None, None, None, OPENSSH_74, ['ed25519'], 'v4'))  # old template
 PLAN.append(('vm-jump-01', None, None, None, OPENSSH_10, ['ed25519', 'rsa4096'], 'dual'))
 for i in range(1, 4):
     PLAN.append((f'srv-nokey-{i:02d}', 'PowerEdge R650', 'Server', 'Filiale Thun', None, [], 'v4'))

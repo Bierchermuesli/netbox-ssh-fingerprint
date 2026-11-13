@@ -1,6 +1,17 @@
 {% extends 'generic/object_list.html' %}
 {% load i18n %}
 
+{% block content %}
+  <div class="btn-list mb-2">
+    {% for f in quick_filters %}
+      <a href="?{{ f.query }}" class="btn btn-sm {% if f.current %}btn-{{ f.color }}{% else %}btn-outline-{{ f.color }}{% endif %}">
+        {{ f.label }} <span class="badge {% if f.current %}text-bg-light{% else %}text-bg-{{ f.color }}{% endif %} ms-1">{{ f.count }}</span>
+      </a>
+    {% endfor %}
+  </div>
+  {{ block.super }}
+{% endblock %}
+
 {% block extra_controls %}
   <a href="{% url 'plugins:netbox_ssh_fingerprint:known_hosts' %}?{{ request.GET.urlencode }}&download=1" class="btn btn-outline-secondary">
     <i class="mdi mdi-download"></i> known_hosts
@@ -8,7 +19,23 @@
   <a href="{% url 'plugins:netbox_ssh_fingerprint:sshfp' %}?{{ request.GET.urlencode }}&download=1" class="btn btn-outline-secondary">
     <i class="mdi mdi-download"></i> SSHFP
   </a>
+  {% if perms.netbox_ssh_fingerprint.add_hostkey %}
+    <a href="{% url 'plugins:netbox_ssh_fingerprint:hostkey_import_known_hosts' %}" class="btn btn-outline-secondary">
+      <i class="mdi mdi-upload"></i> {% trans "Import known_hosts" %}
+    </a>
+  {% endif %}
   <a href="{% url 'plugins:netbox_ssh_fingerprint:report' %}" class="btn btn-outline-secondary">
     <i class="mdi mdi-chart-box-outline"></i> {% trans "Report" %}
   </a>
+{% endblock %}
+
+{% block bulk_buttons %}
+  {% if perms.netbox_ssh_fingerprint.approve_hostkey %}
+    <div class="btn-list">
+      <button type="submit" name="_approve" formaction="{% url 'plugins:netbox_ssh_fingerprint:hostkey_bulk_approve' %}?{{ request.GET.urlencode }}" class="btn btn-green">
+        <i class="mdi mdi-check-decagram"></i> {% trans "Approve selected" %}
+      </button>
+    </div>
+  {% endif %}
+  {{ block.super }}
 {% endblock %}

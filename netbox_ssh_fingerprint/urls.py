@@ -10,6 +10,7 @@ urlpatterns = [
     path('known-hosts/', views.KnownHostsView.as_view(), name='known_hosts'),
     path('sshfp/', views.SSHFPView.as_view(), name='sshfp'),
     path('report/', views.ReportView.as_view(), name='report'),
+    path('report/<str:model>/<str:kind>/', views.HostReportListView.as_view(), name='report_hosts'),
     path('fetch/<str:model>/<int:pk>/', views.FetchView.as_view(), name='fetch'),
     path('replace/<str:model>/<int:pk>/', views.ReplaceHardwareView.as_view(), name='replace_hardware'),
 ]

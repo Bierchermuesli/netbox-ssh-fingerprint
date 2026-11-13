@@ -19,7 +19,10 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["netbox_ssh_fingerprint", "netbox_ssh_fingerprint.api", "netbox_ssh_fingerprint.migrations"]
+packages = [
+    "netbox_ssh_fingerprint", "netbox_ssh_fingerprint.api", "netbox_ssh_fingerprint.migrations",
+    "netbox_ssh_fingerprint.management", "netbox_ssh_fingerprint.management.commands",
+]
 
 [tool.setuptools.package-data]
 netbox_ssh_fingerprint = ["templates/**/*.html"]

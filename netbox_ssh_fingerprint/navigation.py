@@ -1,6 +1,15 @@
+from django.urls import reverse_lazy
+from django.utils.text import format_lazy
 from django.utils.translation import gettext_lazy as _
 
 from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
+
+pending = PluginMenuItem(
+    link='plugins:netbox_ssh_fingerprint:hostkey_list',
+    link_text=_('Pending approval'),
+    permissions=['netbox_ssh_fingerprint.view_hostkey'],
+)
+pending.url = format_lazy('{}?status=pending', reverse_lazy('plugins:netbox_ssh_fingerprint:hostkey_list'))
 
 menu = PluginMenu(
     label=_('SSH Fingerprint'),
@@ -22,6 +31,7 @@ menu = PluginMenu(
                     ),
                 ),
             ),
+            pending,
             PluginMenuItem(
                 link='plugins:netbox_ssh_fingerprint:report',
                 link_text=_('Report'),

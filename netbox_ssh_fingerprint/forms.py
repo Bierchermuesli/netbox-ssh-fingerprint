@@ -52,6 +52,7 @@ class HostKeyFilterForm(PrimaryModelFilterSetForm):
     fieldsets = (
         FieldSet('q', 'filter_id', 'tag'),
         FieldSet('status', 'key_type', 'endpoint', 'source', 'weak', 'shared', name=_('Key')),
+        FieldSet('mismatch', 'stale', 'never_seen', 'duplicate', name=_('Report')),
         FieldSet('device_id', 'virtual_machine_id', 'site_id', 'tenant_id', 'role_id', name=_('Host')),
         FieldSet('owner_group_id', 'owner_id', name=_('Ownership')),
     )
@@ -65,6 +66,18 @@ class HostKeyFilterForm(PrimaryModelFilterSetForm):
     )
     shared = forms.NullBooleanField(
         label=_('Shared'), required=False, widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
+    mismatch = forms.NullBooleanField(
+        label=_('Mismatch'), required=False, widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
+    stale = forms.NullBooleanField(
+        label=_('Stale'), required=False, widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
+    never_seen = forms.NullBooleanField(
+        label=_('Never seen'), required=False, widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
+    duplicate = forms.NullBooleanField(
+        label=_('Duplicate'), required=False, widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES),
     )
     device_id = DynamicModelMultipleChoiceField(queryset=Device.objects.all(), required=False, label=_('Device'))
     virtual_machine_id = DynamicModelMultipleChoiceField(

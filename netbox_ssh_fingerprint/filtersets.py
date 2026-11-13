@@ -1,9 +1,13 @@
+from datetime import timedelta
+
 import django_filters
-from django.db.models import Q
+from django.db.models import Count, Exists, OuterRef, Q
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from dcim.models import Device, DeviceRole, Site
 from netbox.filtersets import PrimaryModelFilterSet
+from netbox.plugins import get_plugin_config
 from tenancy.models import Tenant
 from virtualization.models import VirtualMachine
 
@@ -51,6 +55,10 @@ class HostKeyFilterSet(PrimaryModelFilterSet):
     source = django_filters.MultipleChoiceFilter(choices=HostKeySourceChoices)
     key_type = django_filters.MultipleChoiceFilter(choices=KeyTypeChoices)
     weak = django_filters.BooleanFilter(method='filter_weak', label=_('Weak key'))
+    mismatch = django_filters.BooleanFilter(method='filter_mismatch', label=_('Differs from the active key'))
+    stale = django_filters.BooleanFilter(method='filter_stale', label=_('Active, not seen by a scan recently'))
+    never_seen = django_filters.BooleanFilter(method='filter_never_seen', label=_('Never seen by a scan'))
+    duplicate = django_filters.BooleanFilter(method='filter_duplicate', label=_('Same key on several hosts'))
 
     class Meta:
         model = HostKey
@@ -86,3 +94,33 @@ class HostKeyFilterSet(PrimaryModelFilterSet):
     def filter_weak(self, queryset, name, value):
         weak = Q(key_type='ssh-dss') | Q(key_type='ssh-rsa', bits__lt=2048)
         return queryset.filter(weak) if value else queryset.exclude(weak)
+
+    def _apply(self, queryset, condition, value):
+        return queryset.filter(condition) if value else queryset.exclude(condition)
+
+    def filter_mismatch(self, queryset, name, value):
+        """
+        Pending keys of a type for which the host already has an active key.
+        """
+        active = HostKey.objects.filter(
+            Q(device=OuterRef('device'), device__isnull=False)
+            | Q(virtual_machine=OuterRef('virtual_machine'), virtual_machine__isnull=False),
+            endpoint=OuterRef('endpoint'), key_type=OuterRef('key_type'), status=HostKeyStatusChoices.ACTIVE,
+        )
+        return self._apply(queryset, Q(status=HostKeyStatusChoices.PENDING) & Q(Exists(active)), value)
+
+    def filter_stale(self, queryset, name, value):
+        cutoff = timezone.now() - timedelta(days=get_plugin_config('netbox_ssh_fingerprint', 'stale_days'))
+        return self._apply(queryset, Q(status=HostKeyStatusChoices.ACTIVE, last_seen__lt=cutoff), value)
+
+    def filter_never_seen(self, queryset, name, value):
+        return self._apply(queryset, Q(status=HostKeyStatusChoices.ACTIVE, last_seen__isnull=True), value)
+
+    def filter_duplicate(self, queryset, name, value):
+        dup = (
+            HostKey.objects.exclude(status=HostKeyStatusChoices.REVOKED)
+            .values('fingerprint_sha256')
+            .annotate(hosts=Count('device', distinct=True) + Count('virtual_machine', distinct=True))
+            .filter(hosts__gt=1).values('fingerprint_sha256')
+        )
+        return self._apply(queryset, Q(fingerprint_sha256__in=dup) & ~Q(status=HostKeyStatusChoices.REVOKED), value)

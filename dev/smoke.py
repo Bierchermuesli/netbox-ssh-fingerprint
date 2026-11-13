@@ -123,6 +123,28 @@ try:
         check('srv-bern-03' in body and 'vm-clone-01' in body and 'srv-nokey-01' in body,
               'report lists mismatch, clones and hosts without key')
         check('ap-thun-01' not in body, 'report skips access points (out of scope)')
+        check(body.count('<svg viewBox') == 3 and 'post-quantum' in body, 'report shows three charts')
+
+        # Report drill-down: NetBox lists with filters, pagination and export
+        for url, present, absent in (
+            ('/plugins/ssh-fingerprint/report/devices/without-key/', 'srv-nokey-01', 'ap-thun-01'),
+            ('/plugins/ssh-fingerprint/report/devices/no-pq/', 'sw-thun-01', 'srv-bern-01<'),
+            ('/plugins/ssh-fingerprint/report/devices/unreachable/', 'sw-thun-05', 'sw-thun-01<'),
+            ('/plugins/ssh-fingerprint/report/devices/weak-algorithms/?algorithm=kex:diffie-hellman-group1-sha1',
+             'sw-thun-01', 'sw-bern-01<'),
+            ('/plugins/ssh-fingerprint/report/virtual-machines/no-pq/', 'vm-clone-01', 'vm-app-01<'),
+            ('/plugins/ssh-fingerprint/host-keys/?mismatch=true', 'srv-bern-03', 'srv-bern-01<'),
+            ('/plugins/ssh-fingerprint/host-keys/?duplicate=true', 'vm-clone-02', 'vm-app-01<'),
+            ('/plugins/ssh-fingerprint/host-keys/?never_seen=true', 'vm-app-07', 'srv-bern-01<'),
+        ):
+            r = c.get(url)
+            body = r.content.decode()
+            check(r.status_code == 200 and present in body and absent not in body, f'GET {url} ({r.status_code})')
+        r = c.get('/plugins/ssh-fingerprint/report/devices/no-pq/?export=table')
+        check(r.status_code == 200 and 'sw-thun-01' in r.content.decode(), 'report host list exports CSV')
+        r = c.get('/plugins/ssh-fingerprint/host-keys/')
+        check('Pending <span' in r.content.decode() and 'Mismatches <span' in r.content.decode(),
+              'key list shows quick filters')
         r = c.get(Device.objects.get(name='ap-thun-01').get_absolute_url())
         check(r.status_code == 200 and 'SSH Host Keys' not in r.content.decode(), 'no card on an access point')
 
@@ -175,6 +197,74 @@ try:
         check(r.status_code == 202 and r.json().get('job_id'), f'API fetch in background queues a job ({r.status_code})')
         r = api.get('/api/schema/')
         check(r.status_code == 200, 'API schema renders')
+
+        # Bulk approve: new keys are approved, mismatches only when asked for
+        new_key = HostKey.objects.get(virtual_machine__name='vm-new-01', status='pending')
+        mismatch = HostKey.objects.get(device__name='srv-bern-03', status='pending')
+        pks = [new_key.pk, mismatch.pk]
+        r = c.post('/plugins/ssh-fingerprint/host-keys/approve/', {'pk': pks})
+        body = r.content.decode()
+        check(r.status_code == 200 and 'Also approve 1 mismatch' in body, f'bulk approve preview ({r.status_code})')
+        c.post('/plugins/ssh-fingerprint/host-keys/approve/', {'pk': pks, '_confirm': '1'})
+        new_key.refresh_from_db()
+        mismatch.refresh_from_db()
+        check(new_key.status == 'active' and mismatch.status == 'pending', 'bulk approve skips the mismatch')
+        r = api.post('/api/plugins/ssh-fingerprint/host-keys/approve/', {'ids': [mismatch.pk], 'include_mismatches': True},
+                     content_type='application/json')
+        mismatch.refresh_from_db()
+        check(r.status_code == 200 and r.json()['approved'] == [mismatch.pk] and mismatch.status == 'active'
+              and HostKey.objects.filter(device__name='srv-bern-03', key_type='ssh-ed25519', status='revoked').exists(),
+              f'API bulk approve with mismatches revokes the replaced key ({r.status_code})')
+
+        # Import a known_hosts file
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
+        def fresh():
+            return ed25519.Ed25519PrivateKey.generate().public_key().public_bytes(
+                serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
+
+        thun = Device.objects.get(name='sw-thun-01')
+        thun_ip = str(thun.primary_ip4.address.ip)
+        sw = Device.objects.get(name='sw-bern-01')
+        existing = HostKey.objects.filter(device__name='rt-core-02', status='active').first()
+        k1, k2 = fresh(), fresh()
+        rsa_sw = HostKey.objects.filter(device__name='sw-bern-02', key_type='ssh-rsa').first()
+        known = '\n'.join([
+            '# from the old tool',
+            f'sw-thun-01 {k1}',
+            f'{thun_ip} {k1}',
+            f'ghost-01,203.0.113.250 {fresh()}',
+            f'|1|abc=|def= {fresh()}',
+            f'rt-core-02 {existing.key_type} {existing.public_key}',
+            f'sw-bern-01 ssh-rsa {rsa_sw.public_key}',
+            f'@revoked srv-zh-02 {k2}',
+            'broken line',
+        ])
+        r = api.post('/api/plugins/ssh-fingerprint/import-known-hosts/', {'data': known, 'dry_run': True},
+                     content_type='application/json')
+        counts = r.json().get('counts', {})
+        check(r.status_code == 200 and counts == {'new': 2, 'mismatch': 1, 'existing': 1, 'unmatched': 1,
+                                                  'ambiguous': 0, 'errors': 2},
+              f'import dry run counts ({counts})')
+        check(not HostKey.objects.filter(device=thun, key_type='ssh-ed25519').exists(), 'dry run imports nothing')
+        r = c.post('/plugins/ssh-fingerprint/host-keys/import-known-hosts/', {'data': known, 'status': 'active',
+                                                                              '_preview': '1'})
+        body = r.content.decode()
+        token = body.split('name="token" value="')[1].split('"')[0] if 'name="token"' in body else ''
+        check(r.status_code == 200 and 'ghost-01' in body and token, 'import preview lists the unmatched host')
+        r = c.post('/plugins/ssh-fingerprint/host-keys/import-known-hosts/', {'token': token, 'status': 'active',
+                                                                              '_apply': '1'}, follow=True)
+        check(HostKey.objects.filter(device=thun, key_type='ssh-ed25519', status='active', source='import').exists(),
+              'import: new key active')
+        check(HostKey.objects.filter(device=sw, key_type='ssh-rsa', status='pending', source='import').exists(),
+              'import: key differing from the active one is pending')
+        check(HostKey.objects.filter(device__name='srv-zh-02', status='revoked', source='import').exists(),
+              'import: @revoked line stored as revoked')
+        r = api.post('/api/plugins/ssh-fingerprint/import-known-hosts/', {'data': known},
+                     content_type='application/json')
+        check(r.status_code == 200 and r.json()['counts']['existing'] == 4 and not r.json()['created'],
+              f'import is repeatable ({r.json().get("counts")})')
 
         # A user who may add keys but not approve them: new keys must stay pending
         clerk = User.objects.create_user('clerk', password='x')
