@@ -115,6 +115,10 @@ class ImportKnownHostsView(APIView):
     """
     POST {"data": "<known_hosts>", "status": "pending|active", "dry_run": true}: match the lines to
     devices and VMs and import their keys. Returns the counts and the lines without a host in NetBox.
+
+    With "mode": "scan" the lines are keys just observed (ssh-keyscan output, an Ansible playbook):
+    known keys get last_seen, new keys wait for approval, keys differing from the active one are
+    mismatches. "status" is ignored.
     """
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
@@ -125,14 +129,24 @@ class ImportKnownHostsView(APIView):
         status_ = request.data.get('status', HostKeyStatusChoices.PENDING)
         if status_ not in (HostKeyStatusChoices.ACTIVE, HostKeyStatusChoices.PENDING):
             raise APIValidationError({'status': 'pending or active'})
-        plan = importer.plan_import(request.data.get('data', ''), request.user)
+        mode = request.data.get('mode', 'import')
+        if mode not in importer.MODES:
+            raise APIValidationError({'mode': 'import or scan'})
+        plan = importer.plan_import(request.data.get('data', ''), request.user, mode)
         result = {
             'counts': plan.counts,
             'unmatched': [{'line': n, 'hosts': p} for n, p in plan.unmatched],
             'ambiguous': [{'line': n, 'hosts': p, 'matches': m} for n, p, m in plan.ambiguous],
             'errors': [{'line': n, 'error': e} for n, e in plan.errors],
         }
-        if not request.data.get('dry_run'):
+        if request.data.get('dry_run'):
+            return Response(result)
+        if mode == 'scan':
+            observed = importer.apply_observed(plan)
+            result['result'] = importer.observed_counts(observed)
+            result['mismatched'] = [k.pk for r in observed for k in r.result.mismatched]
+            result['revoked_seen'] = [k.pk for r in observed for k in r.result.revoked_seen]
+        else:
             created, errors = importer.apply_import(plan, status_)
             result['created'] = [k.pk for k in created]
             result['errors'] += [{'line': n, 'error': e} for n, e in errors]

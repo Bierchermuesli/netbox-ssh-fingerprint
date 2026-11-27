@@ -55,6 +55,8 @@ Attacks:
   away, reads its keys and compares them; the result shows on the host page. New keys wait for
   approval; a key that differs from the active one is a mismatch. Changes land in the NetBox changelog
   under the user. The API can do the same, or queue a background job.
+- **Hosts NetBox cannot reach**: an Ansible playbook or a pasted `ssh-keyscan` output reports keys
+  from outside, compared the same way (see [Hosts NetBox cannot reach](#hosts-netbox-cannot-reach)).
 - **Legacy devices**: the fetcher speaks just enough SSH to read the host key. It also works with
   servers a current `ssh-keyscan` can no longer talk to, such as older Cisco IOS offering only
   `ssh-rsa`, `diffie-hellman-group14-sha1` or `group1-sha1`.
@@ -184,7 +186,8 @@ How to use the file with OpenSSH, Ansible, Netmiko and Paramiko: [docs/clients.m
 - `/api/plugins/ssh-fingerprint/host-keys/`: CRUD; `POST …/{id}/approve/`, `POST …/{id}/revoke/`;
   `POST …/approve/` with `{"ids": [...], "include_mismatches": false}` for many keys
 - `POST /api/plugins/ssh-fingerprint/import-known-hosts/` with `{"data": "...", "status": "pending",
-  "dry_run": true}`
+  "dry_run": true}`; with `"mode": "scan"` the lines are scan results (see
+  [Hosts NetBox cannot reach](#hosts-netbox-cannot-reach))
 - `POST /api/plugins/ssh-fingerprint/fetch/` with `{"object_type": "dcim.device", "object_id": 1}`:
   fetches right away and returns the result; add `"background": true` to queue a job instead
 - `GET /api/plugins/ssh-fingerprint/scans/?object_type=dcim.device&object_id=1`
@@ -223,6 +226,60 @@ Keeping it current:
 - The plugin uses the Python libraries of NetBox, so it has no dependencies of its own to keep up to
   date; Dependabot updates the CI actions.
 
+## Hosts NetBox cannot reach
+
+Fetch & verify needs NetBox to reach the SSH port. For segments it cannot reach, or air-gapped ones,
+the keys come in from outside. Every way ends in the same comparison, so NetBox decides what a key
+is, whoever saw it:
+
+```mermaid
+flowchart LR
+  F["Fetch & verify<br/>NetBox connects itself"] --> C
+  A["Ansible playbook<br/>on a management host"] -->|scan results| C
+  K["ssh-keyscan by hand<br/>one host or a whole subnet"] -->|scan results| C
+  C{"compare with<br/>the keys in NetBox"}
+  C -->|same key| S["confirmed:<br/>last seen updated"]
+  C -->|new key| P["pending<br/>(accepted while planned/staged)"]
+  C -->|differs from the active key| M["mismatch, pending"]
+  P -->|approve| ACT["active"]
+  M -->|approve| ACT
+  I["known_hosts import<br/>migration from an old tool"] --> ACT
+  ACT --> E["known_hosts and SSHFP export"]
+```
+
+1. **Fetch & verify** from NetBox, as above.
+2. **Ansible playbook** [`contrib/ansible/collect_host_keys.yml`](contrib/ansible/collect_host_keys.yml)
+   on a management host that reaches the hosts, on its own schedule (cron, AWX, Semaphore). It runs
+   `ssh-keyscan` per host, or reads the keys from the facts of Linux servers, and sends the lines as
+   scan results. `ansible.builtin` only. The playbook never approves anything.
+
+   ```bash
+   NETBOX_URL=https://netbox.example.net NETBOX_TOKEN=... \
+     ansible-playbook -i inventory contrib/ansible/collect_host_keys.yml -e target=switches
+   ```
+
+3. **ssh-keyscan by hand**: the card of a host without an active key shows the command for its
+   addresses. A technician runs it where the host is reachable and pastes the output under
+   *Import known_hosts → Scan results*. A whole subnet works the same way; addresses that have no
+   host in NetBox are listed as gaps in the inventory:
+
+   <img src="docs/images/host-card-keyscan.png" alt="Card of a host without key, with the ssh-keyscan command" width="545">
+
+   ```bash
+   for i in $(seq 1 254); do echo 192.0.2.$i; done | ssh-keyscan -T 3 -f - > scan.txt
+   ```
+
+4. **known_hosts import** for the migration: those keys were already trusted, so they can be
+   imported as active.
+
+Scan results go through the UI, the API (`"mode": "scan"`) or
+`manage.py import_known_hosts --mode scan`. Note that a current `ssh-keyscan` cannot talk to some
+legacy devices (only `ssh-rsa` or `diffie-hellman-group1-sha1`); NetBox's own fetch can.
+
+*Last seen* is the last time any of these ways saw the key. A key confirmed once and never again
+stays valid; *stale* in the report only says it was not confirmed recently (`stale_days`), not that
+it is wrong.
+
 ## SSHFP and DNSSEC
 
 OpenSSH trusts SSHFP records automatically (`VerifyHostKeyDNS yes`) only when the answer is DNSSEC
@@ -248,7 +305,8 @@ post-quantum, `ssh-rsa`) and `lab-ssh-7` (legacy).
 ## Not yet
 
 - Writing SSHFP records to `netbox-plugin-dns`, RFC 2136 or other appliances
-- A standalone collector that fetches from other network segments and reports through the API
+- Fetching through a jump host (SSH `direct-tcpip`) per site or VRF, for segments NetBox cannot reach
+  directly
 - Scheduled scans of all hosts
 - CNAME aliases in `known_hosts`
 - SSH host certificates (`@cert-authority`)

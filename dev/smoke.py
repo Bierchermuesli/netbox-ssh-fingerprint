@@ -277,6 +277,40 @@ try:
         check(r.status_code == 200 and r.json()['counts']['existing'] == 4 and not r.json()['created'],
               f'import is repeatable ({r.json().get("counts")})')
 
+        # Scan results from outside NetBox (ssh-keyscan output, Ansible playbook)
+        from django.utils import timezone
+        nokey = Device.objects.get(name='srv-nokey-02')
+        r = c.get(nokey.get_absolute_url())
+        check(f'ssh-keyscan -T 5 {nokey.primary_ip4.address.ip}' in r.content.decode(),
+              'card of a host without key shows the ssh-keyscan command')
+        ed = HostKey.objects.filter(status='active', key_type='ssh-ed25519', device__isnull=False,
+                                    endpoint='host').exclude(device__name__in=['rt-core-02', 'srv-zh-02']).first()
+        before = timezone.now()
+        scan = '\n'.join([
+            f'# {existing.device.primary_ip4.address.ip}:22 SSH-2.0-OpenSSH_9.6',
+            f'{existing.device.primary_ip4.address.ip} {existing.key_type} {existing.public_key}',
+            f'{nokey.primary_ip4.address.ip} {fresh()}',
+            f'{ed.device.name} {fresh()}',
+            f'srv-zh-02 {k2}',
+            f'@revoked rt-core-02 {fresh()}',
+            f'198.51.100.77 {fresh()}',
+        ])
+        r = api.post('/api/plugins/ssh-fingerprint/import-known-hosts/', {'data': scan, 'mode': 'scan'},
+                     content_type='application/json')
+        res = r.json().get('result', {})
+        existing.refresh_from_db()
+        check(r.status_code == 200 and res.get('refreshed') == 1 and res.get('mismatched') == 1
+              and res.get('revoked_seen') == 1 and res.get('new_pending', 0) + res.get('new_active', 0) == 1
+              and r.json()['counts']['unmatched'] == 1,
+              f'scan results classified ({r.status_code} {r.json()})')
+        check(existing.last_seen and existing.last_seen >= before, 'scan results refresh last seen')
+        check(HostKey.objects.filter(device=nokey, source='scan').exists()
+              and not HostKey.objects.filter(device=nokey, status='active').exists()
+              or nokey.status in ('planned', 'staged'),
+              'scan results: new key of a host in operation waits for approval')
+        check(not HostKey.objects.filter(device__name='rt-core-02', status='revoked', source='scan').exists(),
+              'scan results ignore @revoked lines')
+
         # A user who may add keys but not approve them: new keys must stay pending
         clerk = User.objects.create_user('clerk', password='x')
         perm = ObjectPermission.objects.create(name='hostkeys add', actions=['view', 'add', 'change'])

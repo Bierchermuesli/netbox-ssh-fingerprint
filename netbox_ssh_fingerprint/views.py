@@ -193,22 +193,39 @@ class ImportKnownHostsView(LoginRequiredMixin, View):
         if not request.user.has_perm('netbox_ssh_fingerprint.add_hostkey'):
             raise PermissionDenied
 
+    @staticmethod
+    def _mode(data):
+        mode = data.get('mode')
+        return mode if mode in importer.MODES else 'import'
+
     def get(self, request):
         self._check(request)
-        return render(request, self.template_name, {'can_approve': request.user.has_perm(
-            'netbox_ssh_fingerprint.approve_hostkey')})
+        return render(request, self.template_name, {
+            'mode': self._mode(request.GET),
+            'can_approve': request.user.has_perm('netbox_ssh_fingerprint.approve_hostkey'),
+        })
 
     def post(self, request):
         self._check(request)
         status = request.POST.get('status') or HostKeyStatusChoices.PENDING
         if status not in (HostKeyStatusChoices.ACTIVE, HostKeyStatusChoices.PENDING):
             status = HostKeyStatusChoices.PENDING
+        mode = self._mode(request.POST)
         if '_apply' in request.POST:
             text = cache.get(f'nsf-import-{request.POST.get("token")}')
             if text is None:
                 messages.error(request, 'The preview expired, please upload the file again.')
                 return redirect(request.path)
-            plan = importer.plan_import(text, request.user)
+            plan = importer.plan_import(text, request.user, mode)
+            if mode == 'scan':
+                counts = importer.observed_counts(importer.apply_observed(plan))
+                messages.success(request, (
+                    f'{counts["refreshed"]} key(s) confirmed, {counts["new_active"]} accepted (host being set up), '
+                    f'{counts["new_pending"]} new pending, {counts["mismatched"]} mismatch(es)'))
+                if counts['revoked_seen']:
+                    messages.error(request, f'{counts["revoked_seen"]} host(s) presented a revoked key')
+                url = reverse('plugins:netbox_ssh_fingerprint:hostkey_list')
+                return redirect(f'{url}?status=pending')
             created, errors = importer.apply_import(plan, status)
             messages.success(request, f'Imported {len(created)} host key(s)')
             for lineno, error in errors[:10]:
@@ -219,8 +236,9 @@ class ImportKnownHostsView(LoginRequiredMixin, View):
         text = upload.read().decode('utf-8', 'replace') if upload else request.POST.get('data', '')
         token = uuid.uuid4().hex
         cache.set(f'nsf-import-{token}', text, 3600)
-        plan = importer.plan_import(text, request.user)
+        plan = importer.plan_import(text, request.user, mode)
         return render(request, self.template_name, {
+            'mode': mode,
             'plan': plan,
             'token': token,
             'status': status,

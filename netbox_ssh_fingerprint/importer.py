@@ -1,11 +1,15 @@
 """
-Import an existing known_hosts file: match each line to a device or VM (by name, DNS name or IP),
-then record its key. Used for the migration from an existing tool, whose keys were already trusted.
+Match known_hosts lines to devices and VMs (by name, DNS name or IP) and record their keys. Two modes:
+
+- import: the migration from an existing tool, whose keys were already trusted (apply_import);
+- scan: keys just observed by ssh-keyscan, an Ansible playbook or another collector (apply_observed).
+  They are handled like a fetch from NetBox: known keys get last_seen, new ones wait for approval.
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
 
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from dcim.models import Device
 from netbox.plugins import get_plugin_config
@@ -14,6 +18,7 @@ from virtualization.models import VirtualMachine
 from .choices import HostKeyEndpointChoices, HostKeySourceChoices, HostKeyStatusChoices
 from .keys import InvalidKeyError, canonical_ip, parse_public_key
 from .models import HostKey
+from .scan import record_keys
 
 
 @dataclass
@@ -34,6 +39,7 @@ class Planned:
 
 @dataclass
 class Plan:
+    mode: str = 'import'
     items: list = field(default_factory=list)
     unmatched: list = field(default_factory=list)     # (lineno, patterns)
     ambiguous: list = field(default_factory=list)     # (lineno, patterns, [hosts])
@@ -129,9 +135,16 @@ def _slot(host, endpoint):
     return field, host.pk, endpoint
 
 
-def plan_import(text, user, revoked_too=True):
+MODES = ('import', 'scan')
+
+
+def plan_import(text, user, mode='import'):
+    """
+    In scan mode, @revoked lines are ignored: a scan reports what a host presents, not a verdict.
+    """
     entries, errors = parse_known_hosts(text)
-    plan = Plan(errors=errors)
+    plan = Plan(mode=mode, errors=errors)
+    revoked_too = mode == 'import'
     index = HostIndex(user)
     seen = set()            # (slot, fingerprint) already planned
     active_types = set()    # (slot, key type) that will have an active key
@@ -204,3 +217,34 @@ def apply_import(plan, status):
         key.save()
         created.append(key)
     return created, errors
+
+
+@dataclass
+class ObservedResult:
+    host: object
+    result: object  # scan.EndpointResult
+
+
+def apply_observed(plan, now=None):
+    """
+    Record keys a scan outside NetBox saw, per host and endpoint, like a fetch from NetBox: known keys
+    get last_seen, new keys wait for approval (or are accepted while the host is being set up), keys
+    that differ from the active one are mismatches.
+    """
+    now = now or timezone.now()
+    groups = defaultdict(list)
+    for item in plan.items:
+        groups[(item.host, item.endpoint)].append(item.entry.key)
+    return [ObservedResult(host=host, result=record_keys(host, endpoint, keys, now))
+            for (host, endpoint), keys in groups.items()]
+
+
+def observed_counts(results):
+    counts = dict(refreshed=0, new_active=0, new_pending=0, mismatched=0, revoked_seen=0)
+    for r in results:
+        counts['refreshed'] += len(r.result.matched)
+        counts['new_active'] += len(r.result.new_active)
+        counts['new_pending'] += len(r.result.new_pending)
+        counts['mismatched'] += len(r.result.mismatched)
+        counts['revoked_seen'] += len(r.result.revoked_seen)
+    return counts

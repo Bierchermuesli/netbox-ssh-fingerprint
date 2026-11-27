@@ -1,34 +1,59 @@
 {% extends 'generic/_base.html' %}
 {% load i18n %}
 
-{% block title %}{% trans "Import known_hosts" %}{% endblock %}
+{% block title %}{% trans "Import known_hosts or scan results" %}{% endblock %}
 
 {% block content %}
 {% if not plan %}
   <form method="post" enctype="multipart/form-data" class="form">
     {% csrf_token %}
     <div class="card">
-      <h2 class="card-header">{% trans "Import known_hosts" %}</h2>
+      <h2 class="card-header">{% trans "known_hosts lines" %}</h2>
       <div class="card-body">
         <p class="text-muted">
-          {% trans "Each line is matched to a device or VM by its name, the DNS name of a primary or out-of-band IP, or the IP itself. Lines that match no host are listed, not imported: add the host to NetBox and import again. Keys already recorded are skipped, so the import can be repeated." %}
+          {% trans "Each line is matched to a device or VM by its name, the DNS name of a primary or out-of-band IP, or the IP itself. Lines that match no host are listed, not imported: add the host to NetBox and import again. The import can be repeated." %}
         </p>
+        <div class="mb-3">
+          <label class="form-label">{% trans "What is it?" %}</label>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="mode" id="mode-scan" value="scan" {% if mode == 'scan' %}checked{% endif %}>
+            <label class="form-check-label" for="mode-scan">
+              {% trans "Scan results" %}
+              <div class="form-text mt-0">{% trans "Output of ssh-keyscan or the Ansible playbook, from hosts NetBox cannot reach. Handled like a fetch: known keys are confirmed (last seen), new keys wait for approval, keys that differ from the active one are mismatches." %}</div>
+            </label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="mode" id="mode-import" value="import" {% if mode != 'scan' %}checked{% endif %}>
+            <label class="form-check-label" for="mode-import">
+              {% trans "Migration" %}
+              <div class="form-text mt-0">{% trans "A known_hosts file of an existing tool whose keys were already trusted. Keys already recorded are skipped; @revoked lines are stored as revoked." %}</div>
+            </label>
+          </div>
+        </div>
         <div class="mb-3">
           <label class="form-label" for="file">{% trans "File" %}</label>
           <input class="form-control" type="file" name="file" id="file">
         </div>
         <div class="mb-3">
           <label class="form-label" for="data">{% trans "or paste" %}</label>
-          <textarea class="form-control font-monospace" name="data" id="data" rows="8" placeholder="sw-bern-01,192.0.2.10 ssh-ed25519 AAAA…"></textarea>
+          <textarea class="form-control font-monospace" name="data" id="data" rows="8" placeholder="192.0.2.10 ssh-ed25519 AAAA…  (ssh-keyscan output or a known_hosts file)"></textarea>
         </div>
-        <div class="mb-3">
+        <div class="mb-3" id="status-field">
           <label class="form-label" for="status">{% trans "Status of new keys" %}</label>
           <select class="form-select" name="status" id="status">
             <option value="pending">{% trans "Pending: approve after review" %}</option>
             {% if can_approve %}<option value="active">{% trans "Active: the file comes from a trusted source" %}</option>{% endif %}
           </select>
-          <div class="form-text">{% trans "Keys that would replace an active key are always imported as pending; @revoked lines as revoked." %}</div>
+          <div class="form-text">{% trans "Migration only. Keys that would replace an active key are always imported as pending; @revoked lines as revoked." %}</div>
         </div>
+        <script>
+          (function () {
+            const field = document.getElementById('status-field');
+            const sync = () => { field.hidden = document.getElementById('mode-scan').checked; };
+            document.querySelectorAll('input[name=mode]').forEach(el => el.addEventListener('change', sync));
+            sync();
+          })();
+        </script>
       </div>
       <div class="card-footer text-end">
         <button type="submit" name="_preview" class="btn btn-primary">{% trans "Preview" %}</button>
@@ -40,20 +65,25 @@
     {% csrf_token %}
     <input type="hidden" name="token" value="{{ token }}">
     <input type="hidden" name="status" value="{{ status }}">
+    <input type="hidden" name="mode" value="{{ mode }}">
     <div class="card">
       <h2 class="card-header">{% trans "Preview" %}</h2>
       <div class="card-body">
         <span class="badge text-bg-green">{{ plan.counts.new }} {% trans "new" %}</span>
         <span class="badge text-bg-red">{{ plan.counts.mismatch }} {% trans "differ from the active key (pending)" %}</span>
-        <span class="badge text-bg-gray">{{ plan.counts.existing }} {% trans "already recorded" %}</span>
+        <span class="badge text-bg-gray">{{ plan.counts.existing }} {% if mode == 'scan' %}{% trans "already recorded (confirmed)" %}{% else %}{% trans "already recorded" %}{% endif %}</span>
         <span class="badge text-bg-orange">{{ plan.counts.unmatched }} {% trans "no host in NetBox" %}</span>
         <span class="badge text-bg-orange">{{ plan.counts.ambiguous }} {% trans "ambiguous" %}</span>
         <span class="badge text-bg-red">{{ plan.counts.errors }} {% trans "unreadable" %}</span>
-        <p class="mt-2 mb-0">{% blocktrans %}New keys will be imported as <strong>{{ status }}</strong>.{% endblocktrans %}</p>
+        {% if mode == 'scan' %}
+          <p class="mt-2 mb-0">{% trans "Scan results: recorded keys get a new last seen date, new keys wait for approval (accepted right away while the host is planned or staged)." %}</p>
+        {% else %}
+          <p class="mt-2 mb-0">{% blocktrans %}New keys will be imported as <strong>{{ status }}</strong>.{% endblocktrans %}</p>
+        {% endif %}
       </div>
       <div class="card-footer text-end">
         <a href="" class="btn btn-outline-secondary">{% trans "Back" %}</a>
-        <button type="submit" name="_apply" class="btn btn-primary" {% if not plan.counts.new and not plan.counts.mismatch %}disabled{% endif %}>{% trans "Import" %}</button>
+        <button type="submit" name="_apply" class="btn btn-primary" {% if not plan.counts.new and not plan.counts.mismatch and mode != 'scan' %}disabled{% elif not plan.items %}disabled{% endif %}>{% if mode == 'scan' %}{% trans "Record" %}{% else %}{% trans "Import" %}{% endif %}</button>
       </div>
     </div>
   </form>

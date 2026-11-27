@@ -1,0 +1,102 @@
+# Collect SSH host keys and report them to NetBox (netbox-ssh-fingerprint), for hosts that NetBox
+# itself cannot reach. Run it from a management host that can, on its own schedule (cron, AWX,
+# Semaphore, ...). Uses ansible.builtin only.
+#
+# NetBox decides what each key is: a key already recorded is confirmed (last seen), a new key waits
+# for approval, a key that differs from the active one is a mismatch. The playbook never approves.
+#
+#   NETBOX_URL=https://netbox.example.net NETBOX_TOKEN=... \
+#     ansible-playbook -i inventory collect_host_keys.yml [-e target=switches] [-e dry_run=true]
+#
+# Two ways to read the keys, per host:
+# - default: ssh-keyscan on the control node (network devices, anything with SSH);
+# - host_keys_from_facts=true: the keys from the host's own facts (Linux servers). Ansible has to
+#   log in for that, so use it where the connection is already checked, e.g. during provisioning.
+#
+# Lines are matched to NetBox by the address or name the playbook connects to (ansible_host, else
+# inventory_hostname), so use the primary IP, the OOB IP or the NetBox name.
+
+- name: Collect SSH host keys
+  hosts: "{{ target | default('all') }}"
+  gather_facts: false
+  vars:
+    netbox_url: "{{ lookup('ansible.builtin.env', 'NETBOX_URL') }}"
+    netbox_token: "{{ lookup('ansible.builtin.env', 'NETBOX_TOKEN') }}"
+    netbox_auth_header: "Token {{ netbox_token }}"
+    netbox_validate_certs: true
+    keyscan_timeout: 5
+    host_keys_from_facts: false
+    dry_run: false
+    ssh_target: "{{ ansible_host | default(inventory_hostname) }}"
+    ssh_target_port: "{{ ansible_port | default(22) | int }}"
+    newline: "\n"
+    ssh_pattern: "{{ ssh_target if ssh_target_port | int == 22 else '[' ~ ssh_target ~ ']:' ~ ssh_target_port }}"
+
+  tasks:
+    - name: Scan from the control node
+      ansible.builtin.command:
+        argv: >-
+          {{ ['ssh-keyscan', '-T', keyscan_timeout | string]
+             + (['-p', ssh_target_port | string] if ssh_target_port | int != 22 else [])
+             + [ssh_target] }}
+      delegate_to: localhost
+      register: keyscan
+      changed_when: false
+      failed_when: false
+      when: not host_keys_from_facts | bool
+
+    - name: Read the host keys from the facts
+      ansible.builtin.setup:
+        gather_subset: ['!all', '!min', 'ssh_pub_keys']
+      when: host_keys_from_facts | bool
+
+    - name: Lines from ssh-keyscan
+      ansible.builtin.set_fact:
+        host_key_lines: "{{ keyscan.stdout_lines | default([]) | reject('match', '^#') | list }}"
+      when: not host_keys_from_facts | bool
+
+    - name: Lines from the facts
+      ansible.builtin.set_fact:
+        host_key_lines: >-
+          {{ host_key_lines | default([]) + [ssh_pattern ~ ' '
+             ~ ansible_facts['ssh_host_key_' ~ item ~ '_public_keytype'] ~ ' '
+             ~ ansible_facts['ssh_host_key_' ~ item ~ '_public']] }}
+      loop: [ed25519, ecdsa, rsa]
+      when: host_keys_from_facts | bool and ('ssh_host_key_' ~ item ~ '_public') in ansible_facts
+
+    - name: Hosts without an answer
+      ansible.builtin.debug:
+        msg: "No host key from {{ ssh_target }}: {{ keyscan.stderr | default('') | trim }}"
+      when: host_key_lines | default([]) | length == 0
+
+    - name: Report to NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url | regex_replace('/$', '') }}/api/plugins/ssh-fingerprint/import-known-hosts/"
+        method: POST
+        headers:
+          Authorization: "{{ netbox_auth_header }}"
+          Accept: application/json
+        body_format: json
+        body:
+          mode: scan
+          dry_run: "{{ dry_run | bool }}"
+          data: >-
+            {{ ansible_play_hosts | map('extract', hostvars) | map(attribute='host_key_lines', default=[])
+               | flatten | join(newline) }}
+        validate_certs: "{{ netbox_validate_certs }}"
+      register: netbox_result
+      delegate_to: localhost
+      run_once: true
+      changed_when: >-
+        netbox_result.json.result is defined and (netbox_result.json.result.new_active
+        + netbox_result.json.result.new_pending + netbox_result.json.result.mismatched) > 0
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          result: "{{ netbox_result.json.result | default('dry run') }}"
+          matched: "{{ netbox_result.json.counts }}"
+          not_in_netbox: "{{ netbox_result.json.unmatched }}"
+          ambiguous: "{{ netbox_result.json.ambiguous }}"
+          errors: "{{ netbox_result.json.errors }}"
+      run_once: true

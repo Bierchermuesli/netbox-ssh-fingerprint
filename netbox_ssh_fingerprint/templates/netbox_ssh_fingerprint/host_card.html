@@ -73,6 +73,21 @@
       {% endif %}
     </div>
   {% endfor %}
+  {% if keyscan and can_add %}
+    <div class="card-footer small">
+      <div class="text-muted mb-1">{% trans "Not reachable from NetBox? Run this where the host is reachable and paste the output as scan results:" %}</div>
+      {% for endpoint, command in keyscan %}
+        <div class="d-flex align-items-center gap-1 mb-1">
+          {% if endpoint == 'oob' %}<span class="badge text-bg-blue">OOB</span>{% endif %}
+          <code class="flex-grow-1 text-break" id="keyscan-{{ endpoint }}">{{ command }}</code>
+          {% copy_content endpoint prefix="keyscan-" %}
+        </div>
+      {% endfor %}
+      <a href="{% url 'plugins:netbox_ssh_fingerprint:hostkey_import_known_hosts' %}?mode=scan">
+        <i class="mdi mdi-clipboard-arrow-down-outline"></i> {% trans "Paste scan results" %}
+      </a>
+    </div>
+  {% endif %}
   {% if can_change and keys %}
     <div class="card-footer text-end">
       <form method="post" action="{% url 'plugins:netbox_ssh_fingerprint:replace_hardware' model=model_name pk=host.pk %}" class="d-inline">

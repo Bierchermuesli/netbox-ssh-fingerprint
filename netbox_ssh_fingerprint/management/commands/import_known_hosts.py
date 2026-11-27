@@ -2,21 +2,25 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from utilities.request import apply_request_processors
 
-from netbox_ssh_fingerprint.importer import apply_import, plan_import
+from netbox_ssh_fingerprint.importer import apply_import, apply_observed, observed_counts, plan_import
 from netbox_ssh_fingerprint.jobs import job_request
 
 
 class Command(BaseCommand):
-    help = 'Import a known_hosts file: match lines to devices and VMs and record their keys. Dry run by default.'
+    help = ('Import a known_hosts file or ssh-keyscan output: match lines to devices and VMs and record their '
+            'keys. Dry run by default.')
 
     def add_arguments(self, parser):
         parser.add_argument('file')
         parser.add_argument('--user', required=True, help='NetBox user the changes are logged under')
         parser.add_argument('--status', choices=('pending', 'active'), default='pending',
                             help='Status of new keys (keys that differ from an active key stay pending)')
+        parser.add_argument('--mode', choices=('import', 'scan'), default='import',
+                            help='import: migration, keys were trusted; scan: keys just observed by ssh-keyscan '
+                                 'or a playbook, handled like a fetch')
         parser.add_argument('--apply', action='store_true', help='Import; without it only report')
 
-    def handle(self, file, user, status, apply, **options):
+    def handle(self, file, user, status, mode, apply, **options):
         try:
             user = get_user_model().objects.get(username=user)
         except get_user_model().DoesNotExist:
@@ -24,7 +28,7 @@ class Command(BaseCommand):
         with open(file, encoding='utf-8', errors='replace') as f:
             text = f.read()
         with apply_request_processors(job_request(user)):
-            plan = plan_import(text, user)
+            plan = plan_import(text, user, mode)
             for key, count in plan.counts.items():
                 self.stdout.write(f'{key:10} {count}')
             for lineno, patterns in plan.unmatched:
@@ -35,6 +39,10 @@ class Command(BaseCommand):
                 self.stdout.write(f'error     line {lineno}: {error}')
             if not apply:
                 self.stdout.write('Dry run; use --apply to import.')
+                return
+            if mode == 'scan':
+                for key, count in observed_counts(apply_observed(plan)).items():
+                    self.stdout.write(self.style.SUCCESS(f'{key:13} {count}'))
                 return
             created, errors = apply_import(plan, status)
             for lineno, error in errors:
