@@ -125,8 +125,8 @@
       <table class="table table-hover">
         {% for row in duplicates %}
           <tr>
-            <td class="font-monospace small">{{ row.key_type }}<br>{{ row.fingerprint_sha256 }}</td>
-            <td>{% for key in row.keys %}<a href="{{ key.get_absolute_url }}">{{ key.host }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+            <td class="font-monospace small" style="word-break: break-all">{{ row.key_type }}<br>{{ row.fingerprint_sha256 }}</td>
+            <td>{% for key in row.keys %}<a href="{{ key.get_absolute_url }}" class="text-nowrap">{{ key.host }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</td>
             <td>{% if row.intended %}<span class="badge text-bg-gray">shared</span>{% else %}<span class="badge text-bg-orange">{% trans "unintended" %}</span>{% endif %}</td>
           </tr>
         {% empty %}

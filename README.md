@@ -1,4 +1,7 @@
-# netbox-ssh-fingerprint
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.svg">
+  <img alt="netbox-ssh-fingerprint" src="docs/images/banner-light.svg">
+</picture>
 
 NetBox plugin that keeps the SSH host keys of devices and virtual machines in NetBox, the source of
 truth, and hands them out as `known_hosts` files and SSHFP records. It fetches and verifies keys from
@@ -12,16 +15,33 @@ Requires NetBox 4.6.5 or newer.
 Without a reference for host keys, the first connection to a host is a blind "yes" (trust on first
 use), and automation usually runs with host key checking switched off (`StrictHostKeyChecking=no`,
 `host_key_checking = False`, Paramiko's `AutoAddPolicy`). Nobody then knows whether the device on the
-other end is the one they think it is:
+other end is the one they think it is.
+
+The host key is the only thing that proves it. A hostname, an IP address or a login banner can be
+taken over by anyone who controls a DNS entry, an address or a path through the network.
+
+Operational mistakes:
 
 - an IP address was reused, a DNS entry is stale, a device was swapped (RMA) or re-installed;
 - automation pushes configuration to the wrong device;
-- network devices often use password authentication, so connecting to the wrong host hands it an
-  admin password;
 - people learn to clear host key warnings with `ssh-keygen -R`, and then the check is worthless when it
   matters.
 
-A hostname proves nothing; the host key is the only thing cryptographically bound to the device.
+Attacks:
+
+- **Man in the middle**: whoever sits in the path (a compromised router or jump host, ARP or IPv6 ND
+  spoofing, a rogue DHCP or DNS answer, a hijacked route) answers in the name of the device. Without a
+  checked host key the client cannot tell, and the attacker reads and alters the whole session,
+  including the configuration that automation pushes.
+- **Credential harvesting**: network devices mostly use password authentication, often with central
+  TACACS+ or RADIUS accounts. One connection to a fake device hands over a password that works on
+  every device. Public key authentication does not leak the key, but an impostor still gets
+  everything typed in the session.
+- **Agent forwarding**: connecting with `ssh -A` to an impostor lets it use the forwarded agent to log
+  in elsewhere as the user, for as long as the session lasts.
+- **Hiding in the noise**: where host key warnings are common and routinely cleared, a real attack
+  raises the same warning as a re-installed server and gets waved through. With the keys in NetBox, a
+  warning means something again, and a fetch tells right away whether a changed key is expected.
 
 ## What it does
 
@@ -67,6 +87,24 @@ A hostname proves nothing; the host key is the only thing cryptographically boun
   unreachable hosts. Each section links to the full list: the key list with a filter, or the regular
   NetBox device and VM tables with all their filters, pagination and CSV export.
 - **REST API** for everything, including approve, revoke, fetch and the exports.
+
+## Screenshots
+
+Host keys on the device page, with the algorithms the host offers:
+
+<img src="docs/images/device-card.png" alt="Host key card on a device" width="545">
+
+Report:
+
+![Report](docs/images/report.png)
+
+A key waiting for approval:
+
+![Pending host key](docs/images/host-key-pending.png)
+
+Key list with quick filters and bulk approve:
+
+![Host keys pending approval](docs/images/host-keys.png)
 
 ## Installation
 
