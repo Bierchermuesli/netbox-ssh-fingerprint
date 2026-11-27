@@ -11,7 +11,7 @@ jobs:
   policy-drift:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - name: Compare policy_data.py with the latest ssh-audit
         run: uvx --with ssh-audit pytest -q tests/test_policy_drift.py
@@ -21,7 +21,7 @@ jobs:
     env:
       NETBOX_VERSION: latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Start the latest NetBox with the plugin
         working-directory: dev
         run: |
