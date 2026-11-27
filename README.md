@@ -155,6 +155,16 @@ such as a site), plus two actions:
 
 Give scanners and automation their own user and token, and people their own permissions.
 
+What the status of the device or VM changes:
+
+| Host status | New keys |
+|---|---|
+| `planned`, `staged` (`auto_accept_statuses`) | The first key of each type becomes active right away; the `add` permission is enough. A further or different key of a type that already has an active one is pending. |
+| any other | Pending until someone with `approve` activates it. |
+
+Other status changes do nothing to the keys: a decommissioned host keeps its keys until they are
+revoked, and deleting a host deletes its keys.
+
 ## Exports
 
 | UI | API |
