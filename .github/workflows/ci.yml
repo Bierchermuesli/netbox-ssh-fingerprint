@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: Lint
         run: uvx ruff check --select F,E9 --line-length 120 netbox_ssh_fingerprint tests tools dev
       - name: Unit tests and policy check against the pinned ssh-audit
